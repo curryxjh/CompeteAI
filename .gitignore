@@ -1,0 +1,4 @@
+logs/*
+.idea
+.DS_Store
+mysql_data/

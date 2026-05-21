@@ -1,24 +1,35 @@
 package main
 
 import (
+	"CompeteAI/settings"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// Create a Gin router with default middleware (logger and recovery)
-	r := gin.Default()
+	configFile := filepath.Join("config", "dev.yaml")
+	if len(os.Args) >= 2 && os.Args[1] != "" {
+		configFile = os.Args[1]
+	}
+
+	if err := settings.Init(configFile); err != nil {
+		fmt.Printf("Load config failed, err:%v\n", err)
+		return
+	}
+	
+	server := InitWebServer()
 
 	// Define a simple GET endpoint
-	r.GET("/ping", func(c *gin.Context) {
+	server.GET("/ping", func(c *gin.Context) {
 		// Return JSON response
 		c.JSON(http.StatusOK, gin.H{
 			"message": "pong",
 		})
 	})
 
-	// Start server on port 8080 (default)
-	// Server will listen on 0.0.0.0:8080 (localhost:8080 on Windows)
-	r.Run()
+	server.Run(fmt.Sprintf(":%d", settings.Conf.Port))
 }
