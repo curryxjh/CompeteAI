@@ -1,0 +1,32 @@
+name: "CompeteAI"
+mode: "dev"
+port: 8084
+version: "v0.0.1"
+start_time: "20260521"
+machine_id: 1
+
+auth:
+  jwt_expire: 8760
+
+log:
+  level: "debug"
+  filename: "compete_ai.log"
+  max_size: 200
+  max_age: 30
+  max_backups: 7
+
+mysql:
+  host: 127.0.0.1
+  port: 3308
+  user: "********"
+  password: "********"
+  dbname: "compete_ai"
+  max_open_conns: 200
+  max_idle_conns: 50
+
+redis:
+  host: 127.0.0.1
+  port: 26379
+  password: ""
+  db: 0
+  pool_size: 100
