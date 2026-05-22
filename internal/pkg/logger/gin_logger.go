@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"CompeteAI/settings"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -12,61 +11,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
-
-var lg *zap.Logger
-
-func Init(cfg *settings.LogConfig, mode string) (err error) {
-	writeSyncer := getLogWriter(cfg.Filename, cfg.MaxSize, cfg.MaxBackups, cfg.MaxAge)
-	encoder := getEnoder()
-	var l = new(zapcore.Level)
-	err = l.UnmarshalText([]byte(cfg.Level))
-	if err != nil {
-		return
-	}
-	var core zapcore.Core
-	if mode == "dev" {
-		// 开发模式，日志输出至终端
-		consoleEncoder := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
-		core = zapcore.NewTee(
-			zapcore.NewCore(encoder, writeSyncer, l),
-			zapcore.NewCore(consoleEncoder, zapcore.Lock(os.Stdout), zapcore.DebugLevel))
-	} else {
-		core = zapcore.NewCore(encoder, writeSyncer, l)
-	}
-	lg = zap.New(core, zap.AddCaller())
-	SetGlobalLogger(NewZapLogger(lg))
-
-	zap.ReplaceGlobals(lg)
-	lg.Info("logger init success")
-	return
-}
 
 // Zap 供 GORM 等必须使用 *zap.Logger 的组件使用，业务代码请用 L()。
 func Zap() *zap.Logger {
-	return lg
-}
-
-func getEnoder() zapcore.Encoder {
-	encoderConfig := zap.NewProductionEncoderConfig()
-	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	encoderConfig.TimeKey = "time"
-	encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
-	encoderConfig.EncodeDuration = zapcore.SecondsDurationEncoder
-	encoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
-	return zapcore.NewJSONEncoder(encoderConfig)
-}
-
-func getLogWriter(filename string, maxSize, maxBackUp, maxAge int) zapcore.WriteSyncer {
-	lumberJackLogger := &lumberjack.Logger{
-		Filename:   filename,
-		MaxSize:    maxSize,
-		MaxBackups: maxBackUp,
-		MaxAge:     maxAge,
-	}
-	return zapcore.AddSync(lumberJackLogger)
+	return L().(*ZapLogger).l
 }
 
 func GinLogger() gin.HandlerFunc {
@@ -77,15 +26,15 @@ func GinLogger() gin.HandlerFunc {
 		c.Next()
 
 		cost := time.Since(start)
-		lg.Info(path,
-			zap.Int("status", c.Writer.Status()),
-			zap.String("method", c.Request.Method),
-			zap.String("path", path),
-			zap.String("query", query),
-			zap.String("ip", c.ClientIP()),
-			zap.String("user-agent", c.Request.UserAgent()),
-			zap.String("errors", c.Errors.ByType(gin.ErrorTypePrivate).String()),
-			zap.Duration("cost", cost),
+		L().Info(path,
+			Int("status", c.Writer.Status()),
+			String("method", c.Request.Method),
+			String("path", path),
+			String("query", query),
+			String("ip", c.ClientIP()),
+			String("user-agent", c.Request.UserAgent()),
+			String("errors", c.Errors.ByType(gin.ErrorTypePrivate).String()),
+			Duration("cost", cost),
 		)
 	}
 }
@@ -107,9 +56,9 @@ func GinRecovery(stack bool) gin.HandlerFunc {
 
 				httpRequest, _ := httputil.DumpRequest(c.Request, false)
 				if brokenPipe {
-					lg.Error(c.Request.URL.Path,
-						zap.Any("error", err),
-						zap.String("request", string(httpRequest)),
+					L().Error(c.Request.URL.Path,
+						Any("error", err),
+						String("request", string(httpRequest)),
 					)
 					// If the connection is dead, we can't write a status to it.
 					c.Error(err.(error)) // nolint: errcheck
@@ -118,15 +67,15 @@ func GinRecovery(stack bool) gin.HandlerFunc {
 				}
 
 				if stack {
-					lg.Error("[Recovery from panic]",
-						zap.Any("error", err),
-						zap.String("request", string(httpRequest)),
-						zap.String("stack", string(debug.Stack())),
+					L().Error("[Recovery from panic]",
+						Any("error", err),
+						String("request", string(httpRequest)),
+						String("stack", string(debug.Stack())),
 					)
 				} else {
-					lg.Error("[Recovery from panic]",
-						zap.Any("error", err),
-						zap.String("request", string(httpRequest)),
+					L().Error("[Recovery from panic]",
+						Any("error", err),
+						String("request", string(httpRequest)),
 					)
 				}
 				c.AbortWithStatus(http.StatusInternalServerError)

@@ -16,14 +16,20 @@ func main() {
 		configFile = os.Args[1]
 	}
 
+	// 初始化配置
 	if err := settings.Init(configFile); err != nil {
 		fmt.Printf("Load config failed, err:%v\n", err)
 		return
 	}
-	
+
+	// 初始化日志系统
+	if err := settings.InitLogger(); err != nil {
+		fmt.Printf("Init logger failed, err:%v\n", err)
+		return
+	}
+
 	server := InitWebServer()
 
-	// Define a simple GET endpoint
 	server.GET("/ping", func(c *gin.Context) {
 		// Return JSON response
 		c.JSON(http.StatusOK, gin.H{
