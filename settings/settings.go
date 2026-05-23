@@ -2,6 +2,8 @@ package settings
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"CompeteAI/internal/pkg/logger"
 	"github.com/fsnotify/fsnotify"
@@ -22,6 +24,13 @@ type AppConfig struct {
 	*LogConfig   `mapstructure:"log"`
 	*MySQLConfig `mapstructure:"mysql"`
 	*RedisConfig `mapstructure:"redis"`
+	*LLMConfig   `mapstructure:"llm"`
+}
+
+type LLMConfig struct {
+	BaseURL string `mapstructure:"base_url"`
+	APIKey  string `mapstructure:"api_key"`
+	Model   string `mapstructure:"model"`
 }
 
 type MySQLConfig struct {
@@ -128,6 +137,39 @@ func Init(filePath string) (err error) {
 
 	if err := viper.Unmarshal(Conf); err != nil {
 		fmt.Printf("viper.Unmarshal failed, err:%v\n", err)
+	}
+
+	localPath := strings.TrimSuffix(filePath, ".yaml") + ".local.yaml"
+	if _, statErr := os.Stat(localPath); statErr == nil {
+		localViper := viper.New()
+		localViper.SetConfigFile(localPath)
+		if readErr := localViper.ReadInConfig(); readErr != nil {
+			fmt.Printf("read local config failed, err:%v\n", readErr)
+		} else {
+			var overlay struct {
+				LLM *LLMConfig `mapstructure:"llm"`
+			}
+			if unmarshalErr := localViper.Unmarshal(&overlay); unmarshalErr != nil {
+				fmt.Printf("unmarshal local config failed, err:%v\n", unmarshalErr)
+			} else if overlay.LLM != nil {
+				if Conf.LLMConfig == nil {
+					Conf.LLMConfig = &LLMConfig{}
+				}
+				if overlay.LLM.BaseURL != "" {
+					Conf.LLMConfig.BaseURL = overlay.LLM.BaseURL
+				}
+				if overlay.LLM.Model != "" {
+					Conf.LLMConfig.Model = overlay.LLM.Model
+				}
+				if overlay.LLM.APIKey != "" {
+					Conf.LLMConfig.APIKey = overlay.LLM.APIKey
+				}
+			}
+		}
+	}
+
+	if key := os.Getenv("ARK_API_KEY"); key != "" && Conf.LLMConfig != nil {
+		Conf.LLMConfig.APIKey = key
 	}
 
 	viper.WatchConfig()

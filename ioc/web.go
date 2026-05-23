@@ -13,10 +13,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func InitWebServer(mdls []gin.HandlerFunc, userHdl *web.UserHandler) *gin.Engine {
+func InitWebServer(mdls []gin.HandlerFunc, userHdl *web.UserHandler, chatHdl *web.ChatHandler) *gin.Engine {
 	server := gin.Default()
 	server.Use(mdls...)
 	userHdl.RegisterRoutes(server)
+	chatHdl.RegisterRoutes(server)
 	return server
 }
 
@@ -27,7 +28,9 @@ func InitMiddlewares(redisClient redis.Cmdable, jwtHdl ijwt.Handler) []gin.Handl
 		middleware.NewLoginJWTMiddlewareBuilder(jwtHdl).
 			IgnorePaths("/users/login").
 			IgnorePaths("/users/signup").
-			IgnorePaths("/users/refresh_token").Build(),
+			IgnorePaths("/users/refresh_token").
+			IgnorePaths("/api/chat/completions").
+			IgnorePaths("/api/chat/stream").Build(),
 	}
 }
 
