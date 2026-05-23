@@ -3,3 +3,5 @@ logs/*
 .DS_Store
 mysql_data/
 config/
+docker-compose.yaml
+Dockerfile
