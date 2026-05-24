@@ -3,7 +3,9 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"CompeteAI/internal/mcp/client/transport"
@@ -12,29 +14,46 @@ import (
 
 // Manager MCP 客户端管理器 — 管理多个 MCP Server 连接
 type Manager struct {
-	mu       sync.RWMutex
-	servers  map[string]transport.Transport
-	tools    map[string]*protocol.Tool   // toolName -> Tool
-	toolSrc  map[string]string           // toolName -> serverName
+	mu              sync.RWMutex
+	servers         map[string]transport.Transport
+	tools           map[string]*protocol.Tool
+	toolSrc         map[string]string
+	requestTimeout  time.Duration
+	nextRequestID   atomic.Int64
 }
 
-func NewManager() *Manager {
-	return &Manager{
-		servers: make(map[string]transport.Transport),
-		tools:   make(map[string]*protocol.Tool),
-		toolSrc: make(map[string]string),
+func NewManager(requestTimeout time.Duration) *Manager {
+	if requestTimeout <= 0 {
+		requestTimeout = 60 * time.Second
 	}
+	return &Manager{
+		servers:        make(map[string]transport.Transport),
+		tools:          make(map[string]*protocol.Tool),
+		toolSrc:        make(map[string]string),
+		requestTimeout: requestTimeout,
+	}
+}
+
+func (m *Manager) Enabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.servers) > 0
 }
 
 // Connect 连接一个 MCP Server 并完成初始化握手
 func (m *Manager) Connect(cfg protocol.ServerConfig) error {
-	var t transport.Transport
+	if cfg.URL == "" && cfg.Transport != "stdio" {
+		return fmt.Errorf("server %s: url is required", cfg.Name)
+	}
 
+	var t transport.Transport
 	switch cfg.Transport {
+	case "http":
+		t = transport.NewHTTPTransport(cfg.URL, m.requestTimeout)
 	case "sse":
-		t = transport.NewSSETransport(cfg.URL, time.Duration(30)*time.Second)
+		t = transport.NewSSETransport(cfg.URL, m.requestTimeout)
 	case "stdio":
-		t = transport.NewStdioTransport(cfg.Command, cfg.Args)
+		t = transport.NewStdioTransport(cfg.Command, cfg.Args, cfg.Env)
 	default:
 		return fmt.Errorf("unsupported transport: %s", cfg.Transport)
 	}
@@ -43,13 +62,11 @@ func (m *Manager) Connect(cfg protocol.ServerConfig) error {
 		return fmt.Errorf("connect to %s: %w", cfg.Name, err)
 	}
 
-	// 初始化握手
-	if err := m.initialize(t, cfg.Name); err != nil {
+	if err := m.initialize(t); err != nil {
 		t.Close()
 		return fmt.Errorf("initialize %s: %w", cfg.Name, err)
 	}
 
-	// 拉取工具列表
 	if err := m.fetchTools(t, cfg.Name); err != nil {
 		t.Close()
 		return fmt.Errorf("fetch tools from %s: %w", cfg.Name, err)
@@ -58,11 +75,10 @@ func (m *Manager) Connect(cfg protocol.ServerConfig) error {
 	m.mu.Lock()
 	m.servers[cfg.Name] = t
 	m.mu.Unlock()
-
 	return nil
 }
 
-func (m *Manager) initialize(t transport.Transport, name string) error {
+func (m *Manager) initialize(t transport.Transport) error {
 	params := protocol.InitializeParams{
 		ProtocolVersion: "2024-11-05",
 		ClientInfo: protocol.ClientInfo{
@@ -74,7 +90,7 @@ func (m *Manager) initialize(t transport.Transport, name string) error {
 		},
 	}
 
-	req, err := protocol.NewRequest(1, "initialize", params)
+	req, err := protocol.NewRequest(m.nextID(), "initialize", params)
 	if err != nil {
 		return err
 	}
@@ -83,12 +99,10 @@ func (m *Manager) initialize(t transport.Transport, name string) error {
 	if err != nil {
 		return err
 	}
-
 	if resp.Error != nil {
 		return fmt.Errorf("initialize error: %s", resp.Error.Message)
 	}
 
-	// 发送 initialized 通知
 	notif := &protocol.Notification{
 		JSONRPC: protocol.Version,
 		Method:  "notifications/initialized",
@@ -97,7 +111,7 @@ func (m *Manager) initialize(t transport.Transport, name string) error {
 }
 
 func (m *Manager) fetchTools(t transport.Transport, name string) error {
-	req, err := protocol.NewRequest(2, "tools/list", nil)
+	req, err := protocol.NewRequest(m.nextID(), "tools/list", nil)
 	if err != nil {
 		return err
 	}
@@ -122,8 +136,11 @@ func (m *Manager) fetchTools(t transport.Transport, name string) error {
 		m.toolSrc[tool.Name] = name
 	}
 	m.mu.Unlock()
-
 	return nil
+}
+
+func (m *Manager) nextID() int64 {
+	return m.nextRequestID.Add(1)
 }
 
 // ListTools 返回所有已注册的工具
@@ -143,7 +160,6 @@ func (m *Manager) CallTool(name string, args map[string]interface{}) (*protocol.
 	m.mu.RLock()
 	src, ok := m.toolSrc[name]
 	m.mu.RUnlock()
-
 	if !ok {
 		return nil, fmt.Errorf("tool not found: %s", name)
 	}
@@ -151,7 +167,6 @@ func (m *Manager) CallTool(name string, args map[string]interface{}) (*protocol.
 	m.mu.RLock()
 	t, ok := m.servers[src]
 	m.mu.RUnlock()
-
 	if !ok {
 		return nil, fmt.Errorf("server not found for tool %s", name)
 	}
@@ -161,7 +176,7 @@ func (m *Manager) CallTool(name string, args map[string]interface{}) (*protocol.
 		Arguments: args,
 	}
 
-	req, err := protocol.NewRequest(3, "tools/call", params)
+	req, err := protocol.NewRequest(m.nextID(), "tools/call", params)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +193,27 @@ func (m *Manager) CallTool(name string, args map[string]interface{}) (*protocol.
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal tool result: %w", err)
 	}
+	if result.IsError {
+		return &result, fmt.Errorf("tool %s returned error: %s", name, FormatToolResult(&result))
+	}
 	return &result, nil
+}
+
+// FormatToolResult 将 MCP 工具结果格式化为文本
+func FormatToolResult(result *protocol.CallToolResult) string {
+	if result == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, block := range result.Content {
+		if block.Type == "text" && block.Text != "" {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(block.Text)
+		}
+	}
+	return sb.String()
 }
 
 // Close 关闭所有连接

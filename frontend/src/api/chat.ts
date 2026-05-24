@@ -5,8 +5,25 @@ export interface ChatMessage {
   content: string
 }
 
+export type ChatStreamEventType =
+  | 'thinking'
+  | 'tool_call'
+  | 'tool_result'
+  | 'content'
+
+export interface ChatStreamEvent {
+  type?: ChatStreamEventType
+  content?: string
+  tool_name?: string
+  tool_args?: string
+  tool_result?: string
+  status?: 'running' | 'done' | 'error'
+  error?: string
+  done?: boolean
+}
+
 interface StreamHandlers {
-  onDelta: (text: string) => void
+  onEvent: (ev: ChatStreamEvent) => void
   onDone?: () => void
   onError?: (msg: string) => void
 }
@@ -58,21 +75,16 @@ export async function streamChat(
       if (!payload) continue
 
       try {
-        const ev = JSON.parse(payload) as {
-          content?: string
-          error?: string
-          done?: boolean
-        }
+        const ev = JSON.parse(payload) as ChatStreamEvent
         if (ev.error) {
           handlers.onError?.(ev.error)
           return
         }
-        if (ev.content) {
-          handlers.onDelta(ev.content)
-        }
         if (ev.done) {
           handlers.onDone?.()
+          continue
         }
+        handlers.onEvent(ev)
       } catch {
         // ignore malformed chunks
       }

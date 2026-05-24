@@ -7,6 +7,7 @@ import (
 
 	"CompeteAI/internal/pkg/logger"
 	"github.com/fsnotify/fsnotify"
+	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
@@ -24,13 +25,20 @@ type AppConfig struct {
 	*LogConfig   `mapstructure:"log"`
 	*MySQLConfig `mapstructure:"mysql"`
 	*RedisConfig `mapstructure:"redis"`
-	*LLMConfig   `mapstructure:"llm"`
+	*LLMConfig          `mapstructure:"llm"`
+	*FirecrawlMCPConfig  `mapstructure:"firecrawl_mcp"`
 }
 
 type LLMConfig struct {
 	BaseURL string `mapstructure:"base_url"`
 	APIKey  string `mapstructure:"api_key"`
 	Model   string `mapstructure:"model"`
+}
+
+type FirecrawlMCPConfig struct {
+	Enabled bool     `mapstructure:"enabled"`
+	Command string   `mapstructure:"command"`
+	Args    []string `mapstructure:"args"`
 }
 
 type MySQLConfig struct {
@@ -127,7 +135,15 @@ func InitLogger() error {
 	return nil
 }
 
+func loadEnvFile() {
+	if err := godotenv.Load(".env"); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("load .env failed, err:%v\n", err)
+	}
+}
+
 func Init(filePath string) (err error) {
+	loadEnvFile()
+
 	viper.SetConfigFile(filePath)
 	err = viper.ReadInConfig()
 	if err != nil {

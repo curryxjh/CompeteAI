@@ -7,7 +7,7 @@ import (
 	"CompeteAI/settings"
 )
 
-func InitChatService() *einosvc.ChatService {
+func InitChatService(tools *einosvc.ToolRegistry) *einosvc.ChatService {
 	ctx := context.Background()
 	chatModel, err := einosvc.NewChatModel(ctx)
 	if err != nil {
@@ -18,5 +18,5 @@ func InitChatService() *einosvc.ChatService {
 	if cfg := settings.Conf.LLMConfig; cfg != nil {
 		modelName = cfg.Model
 	}
-	return einosvc.NewChatService(chatModel, modelName)
+	return einosvc.NewChatService(chatModel, modelName, tools)
 }
