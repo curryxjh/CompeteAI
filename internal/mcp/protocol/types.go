@@ -2,11 +2,12 @@ package protocol
 
 // ServerConfig MCP Server 连接配置
 type ServerConfig struct {
-	Name      string `yaml:"name"`      // 服务名称
-	Transport string `yaml:"transport"` // 传输方式: sse / stdio
-	URL       string `yaml:"url"`       // SSE 传输时的 URL
-	Command   string `yaml:"command"`   // stdio 传输时的命令
-	Args      []string `yaml:"args"`    // stdio 传输时的参数
+	Name      string            `yaml:"name"`      // 服务名称
+	Transport string            `yaml:"transport"` // 传输方式: http / sse / stdio
+	URL       string            `yaml:"url"`       // http / sse 传输时的 URL
+	Command   string            `yaml:"command"`   // stdio 传输时的命令
+	Args      []string          `yaml:"args"`      // stdio 传输时的参数
+	Env       map[string]string `yaml:"env"`       // stdio 子进程环境变量
 }
 
 // ClientConfig MCP Client 全局配置

@@ -1,11 +1,31 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { streamChat, type ChatMessage } from '@/api/chat'
+import {
+  streamChat,
+  type ChatMessage,
+  type ChatStreamEvent,
+} from '@/api/chat'
+import { renderMarkdown, stepTypeLabel, toolDisplayName } from '@/utils/markdown'
+
+type StepType = 'thinking' | 'tool'
+
+interface ChatStep {
+  id: string
+  type: StepType
+  content: string
+  toolName?: string
+  toolArgs?: string
+  toolResult?: string
+  status?: 'running' | 'done' | 'error'
+  expanded?: boolean
+}
 
 interface UiMessage extends ChatMessage {
   id: string
   streaming?: boolean
+  steps?: ChatStep[]
+  stepsVisible?: boolean
 }
 
 const messages = ref<UiMessage[]>([
@@ -13,6 +33,7 @@ const messages = ref<UiMessage[]>([
     id: 'welcome',
     role: 'assistant',
     content: '你好，我是 CompeteAI 助手。有什么可以帮你的？',
+    steps: [],
   },
 ])
 
@@ -32,6 +53,131 @@ function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function stepSummary(step: ChatStep, max = 56): string {
+  if (step.type === 'thinking') {
+    return step.content ? truncate(step.content, max) : '思考中…'
+  }
+  const arg = step.toolArgs ?? ''
+  const query = arg.match(/^query:\s*(.+)/m)?.[1]
+  if (query) return truncate(query, max)
+  const url = arg.match(/^url:\s*(.+)/m)?.[1]
+  if (url) {
+    try {
+      const u = new URL(url)
+      const path = u.pathname.length > 1 ? u.pathname : ''
+      return truncate(`${u.hostname.replace(/^www\./, '')}${path}`, max)
+    } catch {
+      return truncate(url, max)
+    }
+  }
+  if (arg) return truncate(arg.split('\n')[0], max)
+  if (step.toolResult) {
+    const first = step.toolResult.split('\n').find((l) => l.trim()) ?? ''
+    return truncate(first.replace(/^#+\s*/, '').replace(/\*\*/g, ''), max)
+  }
+  return step.status === 'running' ? '执行中…' : '已完成'
+}
+
+function stepCount(msg: UiMessage): number {
+  return msg.steps?.length ?? 0
+}
+
+function processStats(msg: UiMessage): string {
+  const steps = msg.steps ?? []
+  if (!steps.length) return ''
+  const tools = steps.filter((s) => s.type === 'tool')
+  const thinking = steps.filter((s) => s.type === 'thinking').length
+  const running = tools.filter((s) => s.status === 'running').length
+  if (running > 0) {
+    const cur = tools.find((s) => s.status === 'running')
+    const name = cur ? toolDisplayName(cur.toolName) : '工具'
+    return `正在 ${name}…`
+  }
+  const parts: string[] = []
+  if (thinking) parts.push(`推理 ${thinking} 次`)
+  const byTool = new Map<string, number>()
+  for (const s of tools) {
+    const key = stepTypeLabel(s)
+    byTool.set(key, (byTool.get(key) ?? 0) + 1)
+  }
+  for (const [name, n] of byTool) {
+    parts.push(`${name} ${n} 次`)
+  }
+  return parts.join('，')
+}
+
+function toggleSteps(msg: UiMessage) {
+  msg.stepsVisible = !msg.stepsVisible
+}
+
+function truncate(text: string, max: number) {
+  const t = text.replace(/\s+/g, ' ').trim()
+  return t.length > max ? `${t.slice(0, max)}…` : t
+}
+
+function handleStreamEvent(assistant: UiMessage, ev: ChatStreamEvent) {
+  if (!assistant.steps) assistant.steps = []
+
+  switch (ev.type) {
+    case 'thinking': {
+      const last = assistant.steps.at(-1)
+      if (last?.type === 'thinking' && assistant.streaming) {
+        last.content += ev.content ?? ''
+      } else {
+        assistant.steps.push({
+          id: uid(),
+          type: 'thinking',
+          content: ev.content ?? '',
+          expanded: false,
+        })
+      }
+      break
+    }
+    case 'tool_call': {
+      assistant.steps.push({
+        id: uid(),
+        type: 'tool',
+        content: '',
+        toolName: ev.tool_name,
+        toolArgs: ev.tool_args,
+        status: 'running',
+        expanded: false,
+      })
+      break
+    }
+    case 'tool_result': {
+      const step = [...assistant.steps].reverse().find(
+        (s) => s.type === 'tool' && s.toolName === ev.tool_name && s.status === 'running',
+      )
+      if (step) {
+        step.toolResult = ev.tool_result
+        step.toolArgs = ev.tool_args ?? step.toolArgs
+        step.status = ev.status === 'error' ? 'error' : 'done'
+        step.expanded = false
+      } else {
+        assistant.steps.push({
+          id: uid(),
+          type: 'tool',
+          content: '',
+          toolName: ev.tool_name,
+          toolArgs: ev.tool_args,
+          toolResult: ev.tool_result,
+          status: ev.status === 'error' ? 'error' : 'done',
+          expanded: false,
+        })
+      }
+      break
+    }
+    case 'content':
+      assistant.content += ev.content ?? ''
+      break
+    default:
+      if (ev.content) {
+        assistant.content += ev.content
+      }
+  }
+}
+
 async function send() {
   const text = input.value.trim()
   if (!text || loading.value) return
@@ -44,13 +190,15 @@ async function send() {
     id: assistantId,
     role: 'assistant',
     content: '',
+    steps: [],
+    stepsVisible: true,
     streaming: true,
   })
   loading.value = true
   scrollToBottom()
 
   const history: ChatMessage[] = messages.value
-    .filter((m) => m.id !== 'welcome' && !(m.id === assistantId))
+    .filter((m) => m.id !== 'welcome' && m.id !== assistantId)
     .map(({ role, content }) => ({ role, content }))
   history.push({ role: 'user', content: text })
 
@@ -64,8 +212,8 @@ async function send() {
     await streamChat(
       history.filter((m) => m.content),
       {
-        onDelta(delta) {
-          assistant.content += delta
+        onEvent(ev) {
+          handleStreamEvent(assistant, ev)
           scrollToBottom()
         },
         onError(msg) {
@@ -86,6 +234,7 @@ async function send() {
     }
   } finally {
     assistant.streaming = false
+    assistant.stepsVisible = false
     loading.value = false
     scrollToBottom()
   }
@@ -112,8 +261,13 @@ function clearChat() {
       id: 'welcome',
       role: 'assistant',
       content: '对话已清空。继续提问吧。',
+      steps: [],
     },
   ]
+}
+
+function toggleStep(step: ChatStep) {
+  step.expanded = !step.expanded
 }
 
 onMounted(scrollToBottom)
@@ -125,7 +279,7 @@ onMounted(scrollToBottom)
       <div class="chat-header-inner">
         <div>
           <h2>AI 对话</h2>
-          <p class="model-tag">Doubao-Seed-2.0-lite</p>
+          <p class="model-tag">Doubao-Seed-2.0-lite · Firecrawl MCP</p>
         </div>
         <button type="button" class="btn-ghost btn-sm" @click="clearChat">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -155,10 +309,89 @@ onMounted(scrollToBottom)
           </template>
         </div>
         <div class="bubble">
-          <p class="bubble-text">
-            {{ msg.content }}
-            <span v-if="msg.streaming" class="cursor">▍</span>
+          <div
+            v-if="msg.role === 'assistant' && (msg.content || msg.streaming)"
+            class="bubble-text answer-card"
+          >
+            <div
+              v-if="msg.content"
+              class="md-body"
+              v-html="renderMarkdown(msg.content)"
+            />
+            <span v-if="msg.streaming && !msg.content" class="cursor">▍</span>
+            <span v-else-if="msg.streaming" class="cursor">▍</span>
+          </div>
+          <p v-else-if="msg.role === 'assistant' && msg.streaming && !msg.steps?.length" class="bubble-text muted">
+            正在思考<span class="cursor">▍</span>
           </p>
+          <p v-else-if="msg.role === 'user' && msg.content" class="bubble-text">
+            {{ msg.content }}
+          </p>
+
+          <div
+            v-if="msg.role === 'assistant' && msg.steps?.length"
+            class="process-panel"
+            :class="{ open: msg.stepsVisible, streaming: msg.streaming }"
+          >
+            <button type="button" class="process-head" @click="toggleSteps(msg)">
+              <span class="process-icon">{{ msg.streaming ? '⏳' : '⚙️' }}</span>
+              <span class="process-title">
+                {{ msg.streaming ? '执行中' : '执行过程' }}
+                <span class="process-count">{{ stepCount(msg) }} 步</span>
+              </span>
+              <span class="process-stats">{{ processStats(msg) }}</span>
+              <span class="process-toggle">{{ msg.stepsVisible ? '收起详情' : '展开详情' }}</span>
+            </button>
+            <ul v-if="!msg.stepsVisible" class="process-preview">
+              <li
+                v-for="(step, index) in msg.steps"
+                :key="step.id"
+                class="process-preview-item"
+              >
+                <span class="preview-index">{{ index + 1 }}</span>
+                <span class="preview-label">{{ stepTypeLabel(step) }}</span>
+                <span class="preview-text">{{ stepSummary(step, 80) }}</span>
+              </li>
+            </ul>
+            <div v-show="msg.stepsVisible" class="process-body">
+              <div
+                v-for="step in msg.steps"
+                :key="step.id"
+                class="step-row"
+                :class="[step.type, step.status, { open: step.expanded }]"
+              >
+                <button type="button" class="step-row-head" @click="toggleStep(step)">
+                  <span class="step-dot" />
+                  <span class="step-row-label">
+                    {{ stepTypeLabel(step) }}
+                  </span>
+                  <span class="step-row-summary">{{ stepSummary(step) }}</span>
+                  <span v-if="step.type === 'tool'" class="step-row-badge" :class="step.status">
+                    {{ step.status === 'running' ? '…' : step.status === 'error' ? '!' : '✓' }}
+                  </span>
+                </button>
+                <div v-show="step.expanded" class="step-row-detail">
+                  <template v-if="step.type === 'thinking'">
+                    <pre class="step-text">{{ step.content }}</pre>
+                  </template>
+                  <template v-else>
+                    <div v-if="step.toolArgs" class="step-block">
+                      <p class="step-label">参数</p>
+                      <pre class="step-text args">{{ step.toolArgs }}</pre>
+                    </div>
+                    <div v-if="step.toolResult" class="step-block">
+                      <p class="step-label">结果</p>
+                      <div
+                        class="step-md md-body"
+                        v-html="renderMarkdown(step.toolResult)"
+                      />
+                    </div>
+                    <p v-else-if="step.status === 'running'" class="step-pending">正在调用…</p>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -200,7 +433,7 @@ onMounted(scrollToBottom)
           </button>
         </div>
       </div>
-      <p class="chat-hint">CompeteAI · powered by Volcengine Ark</p>
+      <p class="chat-hint">CompeteAI · 支持展示思考过程与 MCP 工具调用</p>
     </footer>
   </div>
 </template>
@@ -226,8 +459,9 @@ onMounted(scrollToBottom)
   align-items: center;
   justify-content: space-between;
   padding: 12px 24px;
-  max-width: 880px;
+  max-width: 1000px;
   margin: 0 auto;
+  width: 100%;
 }
 
 .chat-header h2 {
@@ -261,7 +495,7 @@ onMounted(scrollToBottom)
 .msg-row {
   display: flex;
   gap: 12px;
-  max-width: 780px;
+  max-width: min(1000px, calc(100% - 16px));
   width: 100%;
   margin: 0 auto;
 }
@@ -301,12 +535,284 @@ onMounted(scrollToBottom)
 .bubble {
   flex: 1;
   min-width: 0;
-  max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.msg-row.assistant .bubble {
+  max-width: 100%;
 }
 
 .msg-row.user .bubble {
+  max-width: 78%;
+}
+
+.msg-row.user .bubble {
+  align-items: flex-end;
+}
+
+.process-panel:not(.open) {
+  opacity: 1;
+}
+
+.process-panel:not(.open) .process-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.process-preview {
+  list-style: none;
+  margin: 0;
+  padding: 8px 12px 10px;
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.process-preview-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.preview-index {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.preview-label {
+  flex-shrink: 0;
+  min-width: 56px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.preview-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.process-panel {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.process-panel.streaming {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.process-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.process-icon {
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.process-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.process-count {
+  margin-left: 4px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.process-stats {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.process-toggle {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--accent-light);
+}
+
+.process-body {
+  padding: 4px 12px 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.step-row {
+  position: relative;
+}
+
+.step-row + .step-row {
+  margin-top: 2px;
+}
+
+.step-row-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.step-row-head:hover {
+  color: var(--text-primary);
+}
+
+.step-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--border-default);
+}
+
+.step-row.thinking .step-dot {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+.step-row.tool.running .step-dot {
+  background: #d97706;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.step-row.tool.done .step-dot {
+  background: #16a34a;
+}
+
+.step-row.tool.error .step-dot {
+  background: var(--danger);
+}
+
+.step-row-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  min-width: 44px;
+}
+
+.step-row-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.step-row-badge {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.step-row-badge.running {
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.step-row-badge.done {
+  color: #16a34a;
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.step-row-badge.error {
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+.step-row-detail {
+  margin: 2px 0 6px 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-subtle);
+}
+
+@keyframes pulse {
+  50% { opacity: 0.4; }
+}
+
+.step-block + .step-block {
+  margin-top: 8px;
+}
+
+.step-label {
+  margin: 0 0 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.step-text {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  max-height: 240px;
+  overflow: auto;
+}
+
+.step-text.result {
+  max-height: 320px;
+}
+
+.step-pending {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .bubble-text {
@@ -320,6 +826,143 @@ onMounted(scrollToBottom)
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
+}
+
+.bubble-text.muted {
+  color: var(--text-muted);
+}
+
+.answer-card {
+  white-space: normal;
+}
+
+.answer-card .md-body:empty {
+  display: none;
+}
+
+.step-md {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  max-height: 320px;
+  overflow: auto;
+}
+
+.step-text.args {
+  max-height: 120px;
+}
+
+.md-body {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.md-body :first-child {
+  margin-top: 0;
+}
+
+.md-body :last-child {
+  margin-bottom: 0;
+}
+
+.md-body p,
+.md-body ul,
+.md-body ol,
+.md-body pre,
+.md-body blockquote {
+  margin: 0.5em 0;
+}
+
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  margin: 0.8em 0 0.4em;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.md-body h1 { font-size: 1.35em; }
+.md-body h2 { font-size: 1.2em; }
+.md-body h3 { font-size: 1.05em; }
+
+.md-body ul,
+.md-body ol {
+  padding-left: 1.4em;
+}
+
+.md-body li + li {
+  margin-top: 0.25em;
+}
+
+.md-body a {
+  color: var(--accent-light);
+  text-decoration: none;
+}
+
+.md-body a:hover {
+  text-decoration: underline;
+}
+
+.md-body code {
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: var(--font-mono);
+  background: rgba(99, 102, 241, 0.12);
+}
+
+.md-body pre {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  overflow: auto;
+}
+
+.md-body pre code {
+  padding: 0;
+  background: none;
+}
+
+.md-body blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.md-body table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.md-body .table-wrap {
+  overflow-x: auto;
+  margin: 0.75em 0;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+.md-body th,
+.md-body td {
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  vertical-align: top;
+  text-align: left;
+  white-space: normal;
+  min-width: 88px;
+  max-width: 360px;
+}
+
+.md-body th {
+  background: var(--bg-base);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .msg-row.user .bubble-text {
@@ -354,7 +997,7 @@ onMounted(scrollToBottom)
 }
 
 .chat-input-box {
-  max-width: 780px;
+  max-width: 1000px;
   margin: 0 auto;
   display: flex;
   gap: 10px;
@@ -436,7 +1079,7 @@ onMounted(scrollToBottom)
 }
 
 .chat-hint {
-  max-width: 780px;
+  max-width: 1000px;
   margin: 8px auto 0;
   font-size: 10px;
   color: var(--text-muted);

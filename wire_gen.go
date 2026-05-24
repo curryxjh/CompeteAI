@@ -29,8 +29,10 @@ func InitWebServer() *gin.Engine {
 	userRepository := repository.NewUserRepository(userDao, userCache)
 	userService := service.NewUserService(userRepository)
 	userHandler := web.NewUserHandler(userService, cmdable)
-	chatService := ioc.InitChatService()
+	toolRegistry := ioc.InitFirecrawlTools()
+	chatService := ioc.InitChatService(toolRegistry)
 	chatHandler := web.NewChatHandler(chatService)
-	engine := ioc.InitWebServer(v, userHandler, chatHandler)
+	mcpHandler := web.NewMCPHandler(toolRegistry)
+	engine := ioc.InitWebServer(v, userHandler, chatHandler, mcpHandler)
 	return engine
 }

@@ -30,9 +30,14 @@ type chatReq struct {
 }
 
 type streamEvent struct {
-	Content string `json:"content,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Done    bool   `json:"done,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Content    string `json:"content,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
+	ToolArgs   string `json:"tool_args,omitempty"`
+	ToolResult string `json:"tool_result,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Done       bool   `json:"done,omitempty"`
 }
 
 func (h *ChatHandler) Completions(c *gin.Context) {
@@ -80,8 +85,15 @@ func (h *ChatHandler) Stream(c *gin.Context) {
 		flusher.Flush()
 	}
 
-	err := h.chat.StreamChat(c.Request.Context(), req.Messages, func(delta string) error {
-		writeEvent(streamEvent{Content: delta})
+	err := h.chat.StreamChat(c.Request.Context(), req.Messages, func(ev einosvc.StreamEvent) error {
+		writeEvent(streamEvent{
+			Type:       string(ev.Type),
+			Content:    ev.Content,
+			ToolName:   ev.ToolName,
+			ToolArgs:   ev.ToolArgs,
+			ToolResult: ev.ToolResult,
+			Status:     ev.Status,
+		})
 		return nil
 	})
 	if err != nil {

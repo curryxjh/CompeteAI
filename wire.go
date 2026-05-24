@@ -30,12 +30,14 @@ func InitWebServer() *gin.Engine {
 		repository.NewUserRepository,
 		// Service
 		service.NewUserService,
-		// Eino Chat
+		// Eino Chat + Firecrawl MCP
+		ioc.InitFirecrawlTools,
 		ioc.InitChatService,
 		// Handler
 		ijwt.NewRedisJwtHandler,
 		web.NewUserHandler,
 		web.NewChatHandler,
+		web.NewMCPHandler,
 
 		// middlewares
 		ioc.InitMiddlewares,

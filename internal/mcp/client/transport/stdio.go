@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 
 	"CompeteAI/internal/mcp/protocol"
@@ -15,15 +16,20 @@ type StdioTransport struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Scanner
+	env    map[string]string
 }
 
-func NewStdioTransport(command string, args []string) *StdioTransport {
+func NewStdioTransport(command string, args []string, env map[string]string) *StdioTransport {
 	return &StdioTransport{
 		cmd: exec.Command(command, args...),
+		env: env,
 	}
 }
 
 func (t *StdioTransport) Connect() error {
+	if len(t.env) > 0 {
+		t.cmd.Env = append(os.Environ(), flattenEnv(t.env)...)
+	}
 	stdin, err := t.cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("get stdin pipe: %w", err)
@@ -84,4 +90,12 @@ func (t *StdioTransport) Close() error {
 
 func (t *StdioTransport) IsConnected() bool {
 	return t.cmd.Process != nil
+}
+
+func flattenEnv(env map[string]string) []string {
+	out := make([]string, 0, len(env))
+	for k, v := range env {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
