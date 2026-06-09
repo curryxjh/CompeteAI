@@ -163,6 +163,7 @@ func (e *Engine) cancelTask(ctx context.Context, taskID string, store state.Task
 	task.UpdatedAt = time.Now().Format(time.RFC3339)
 	_ = e.tasks.Update(ctx, task)
 	e.hub.Publish(taskID, "task_failed", map[string]string{"message": reason})
+	e.releaseBlackboard(taskID)
 	return context.Canceled
 }
 
@@ -293,6 +294,7 @@ func (e *Engine) completeTask(ctx context.Context, taskID string, store state.Ta
 	})
 	metrics.IncTaskCompleted()
 	e.ingestTaskCompletion(ctx, taskID, store, report.QAScore)
+	e.releaseBlackboard(taskID)
 	return nil
 }
 
@@ -314,7 +316,15 @@ func (e *Engine) failTask(ctx context.Context, store state.TaskStore, task domai
 	}
 	e.hub.Publish(task.ID, "task_failed", map[string]string{"message": msg})
 	metrics.IncTaskFailed()
+	e.releaseBlackboard(task.ID)
 	return nil
+}
+
+// releaseBlackboard 任务终态时释放内存 Blackboard（Redis 模式无需操作）。
+func (e *Engine) releaseBlackboard(taskID string) {
+	if !e.useRedisBB {
+		state.GlobalRegistry().Release(taskID)
+	}
 }
 
 func (e *Engine) setAgentRunning(_ context.Context, task *domain.Task, name domain.AgentName) {

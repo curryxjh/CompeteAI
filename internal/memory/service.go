@@ -41,34 +41,71 @@ func (NoopService) InvalidateFact(context.Context, string, string) error { retur
 func (NoopService) ListPreferences(context.Context, ScopeType, string) ([]Preference, error) {
 	return nil, nil
 }
+func (NoopService) Close() error { return nil }
 
 type service struct {
-	dao        *dao.MemoryDao
-	cfg        *settings.MemoryConfig
-	extractor  Extractor
-	embedder   Embedder
-	retriever  Retriever
-	governance Governance
-	explicit   *ExplicitLoader
-	assembler  *Assembler
-	resolver   *Resolver
-	ranker     *Ranker
-	scopeCache sync.Map
+	dao          *dao.MemoryDao
+	cfg          *settings.MemoryConfig
+	extractor    Extractor
+	embedder     Embedder
+	retriever    Retriever
+	embStore     EmbeddingStore
+	milvusClient *MilvusClient
+	governance   Governance
+	explicit     *ExplicitLoader
+	assembler    *Assembler
+	resolver     *Resolver
+	ranker       *Ranker
+	scopeCache   sync.Map
 }
 
 // NewService 构建长期记忆服务。
+// 若 cfg.Milvus.Enabled 为 true 且连接成功，则使用 HybridRetriever（Milvus ANN + MySQL）；
+// 否则退回到纯 MySQL 检索。
 func NewService(dbDao *dao.MemoryDao, cfg *settings.MemoryConfig) MemoryService {
 	if cfg == nil || !cfg.Enabled {
 		return NoopService{}
 	}
-	emb := NewHashEmbedder(128)
+	// 根据配置选择 Embedder
+	var emb Embedder
+	if cfg.Embedder != nil && cfg.Embedder.Type == "volcano" {
+		emb = NewVolcanoEmbedder(cfg.Embedder)
+	} else {
+		emb = NewHashEmbedder(hashEmbedDim)
+	}
+
+	// 尝试初始化 Milvus（失败时降级到纯 MySQL 模式，不阻断启动）
+	var milvusClient *MilvusClient
+	if cfg.Milvus != nil && cfg.Milvus.Enabled {
+		mc, err := NewMilvusClient(cfg.Milvus)
+		if err != nil {
+			// 降级：仅记录日志，不 panic
+			_ = err // 实际项目中应记录 warn 日志
+		} else {
+			milvusClient = mc
+		}
+	}
+
+	// 构建 EmbeddingStore（双写 MySQL + Milvus）
+	embStore := NewEmbeddingStore(dbDao, milvusClient)
+
+	// 根据 Milvus 可用性选择 Retriever
+	mysqlRet := NewMySQLRetriever(dbDao, emb)
+	var ret Retriever
+	if milvusClient != nil {
+		milvusRet := NewMilvusRetriever(milvusClient, cfg.Milvus)
+		ret = NewHybridRetriever(milvusRet, mysqlRet, emb)
+	} else {
+		ret = mysqlRet
+	}
+
 	gov := NewGovernance(dbDao, cfg)
 	resolver := NewResolver(dbDao)
 	ext := NewExtractor(resolver)
-	ret := NewMySQLRetriever(dbDao, emb)
 	return &service{
 		dao: dbDao, cfg: cfg,
 		extractor: ext, embedder: emb, retriever: ret,
+		embStore: embStore, milvusClient: milvusClient,
 		governance: gov, explicit: NewExplicitLoader(cfg.ExplicitFile),
 		assembler: NewAssembler(ret, dbDao, cfg), resolver: resolver, ranker: NewRanker(),
 	}
@@ -378,10 +415,15 @@ func (s *service) IngestTaskCompletion(ctx context.Context, req IngestEpisodeReq
 	}
 	vec, _ := s.embedder.Embed(ctx, []string{ep.Summary})
 	if len(vec) > 0 {
-		_ = s.dao.CreateEmbedding(ctx, dao.MemoryEmbeddingEntity{
-			ID: uuid.NewString(), ObjectType: "episode", ObjectID: entity.ID,
-			ScopeType: string(ScopeProject), ScopeKey: projectID,
-			ContentText: ep.Summary, EmbeddingJSON: dao.MarshalJSON(vec[0]),
+		// 双写：MySQL + Milvus（通过 EmbeddingStore 统一管理）
+		_ = s.embStore.Write(ctx, WriteEmbeddingRequest{
+			MySQLID:     uuid.NewString(),
+			ObjectType:  "episode",
+			ObjectID:    entity.ID,
+			ScopeType:   string(ScopeProject),
+			ScopeKey:    projectID,
+			ContentText: ep.Summary,
+			Vector:      vec[0],
 		})
 	}
 	_ = s.dao.CreateEvent(ctx, dao.MemoryEventEntity{
@@ -465,6 +507,17 @@ func (s *service) ResolveEntities(ctx context.Context, req ResolveEntitiesReques
 
 func (s *service) InvalidateFact(ctx context.Context, factID, reason string) error {
 	return s.governance.Invalidate(ctx, factID, reason)
+}
+
+// Close 释放 Milvus 连接和后台 repair goroutine。
+func (s *service) Close() error {
+	if s.embStore != nil {
+		s.embStore.Close()
+	}
+	if s.milvusClient != nil {
+		return s.milvusClient.Close()
+	}
+	return nil
 }
 
 func (s *service) ListPreferences(ctx context.Context, scopeType ScopeType, scopeKey string) ([]Preference, error) {

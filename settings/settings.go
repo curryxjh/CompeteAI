@@ -62,9 +62,42 @@ type MemoryConfig struct {
 	ProjectID    string `mapstructure:"project_id"`
 	WorkspaceID  string `mapstructure:"workspace_id"`
 
-	Retrieval MemoryRetrievalConfig `mapstructure:"retrieval"`
+	Embedder    *EmbedderConfig         `mapstructure:"embedder"`
+	Milvus      *MilvusConfig           `mapstructure:"milvus"`
+	Retrieval   MemoryRetrievalConfig   `mapstructure:"retrieval"`
 	WritePolicy MemoryWritePolicyConfig `mapstructure:"write_policy"`
-	Governance MemoryGovernanceConfig `mapstructure:"governance"`
+	Governance  MemoryGovernanceConfig  `mapstructure:"governance"`
+}
+
+// MilvusConfig 向量数据库配置。
+type MilvusConfig struct {
+	// Enabled 总开关；false 时退回到 MySQL 纯关键词模式
+	Enabled          bool   `mapstructure:"enabled"`
+	// Address gRPC 地址，如 "localhost:19530"
+	Address          string `mapstructure:"address"`
+	// CollectionPrefix collection 名称前缀，实际名 = prefix + "_embeddings"
+	CollectionPrefix string `mapstructure:"collection_prefix"`
+	// Dim 向量维度，需与 Embedder.Dim 一致，默认 1024
+	Dim              int    `mapstructure:"dim"`
+	// IndexType 索引类型，默认 "HNSW"
+	IndexType        string `mapstructure:"index_type"`
+	// MetricType 距离类型，默认 "COSINE"
+	MetricType       string `mapstructure:"metric_type"`
+	// HNSWM HNSW 图连接数，默认 16
+	HNSWM            int    `mapstructure:"hnsw_m"`
+	// HNSWEfConstruct HNSW 构建时 ef 参数，默认 200
+	HNSWEfConstruct  int    `mapstructure:"hnsw_ef_construct"`
+}
+
+// EmbedderConfig Embedding API 配置。
+type EmbedderConfig struct {
+	// Type: "volcano"（豆包/火山引擎）| "hash"（本地哈希，降级用）
+	Type     string `mapstructure:"type"`
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+	// Dim 向量维度，volcano-large 为 1024，小模型为 256
+	Dim int `mapstructure:"dim"`
 }
 
 type MemoryRetrievalConfig struct {
@@ -181,6 +214,18 @@ func InitLogger() error {
 	return nil
 }
 
+// envInt 将环境变量字符串转为 int，解析失败返回 0。
+func envInt(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
 func loadEnvFile() {
 	if err := godotenv.Load(".env"); err != nil && !os.IsNotExist(err) {
 		fmt.Printf("load .env failed, err:%v\n", err)
@@ -232,6 +277,75 @@ func Init(filePath string) (err error) {
 
 	if key := os.Getenv("ARK_API_KEY"); key != "" && Conf.LLMConfig != nil {
 		Conf.LLMConfig.APIKey = key
+	}
+
+	// ── MySQL 地址覆盖 ──────────────────────────────────────────────
+	// MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD / MYSQL_DB
+	if Conf.MySQLConfig == nil {
+		Conf.MySQLConfig = &MySQLConfig{}
+	}
+	if v := os.Getenv("MYSQL_HOST"); v != "" {
+		Conf.MySQLConfig.Host = v
+	}
+	if v := os.Getenv("MYSQL_PORT"); v != "" {
+		if p := envInt(v); p > 0 {
+			Conf.MySQLConfig.Port = p
+		}
+	}
+	if v := os.Getenv("MYSQL_USER"); v != "" {
+		Conf.MySQLConfig.User = v
+	}
+	if v := os.Getenv("MYSQL_PASSWORD"); v != "" {
+		Conf.MySQLConfig.Password = v
+	}
+	if v := os.Getenv("MYSQL_DB"); v != "" {
+		Conf.MySQLConfig.DB = v
+	}
+
+	// ── Redis 地址覆盖 ──────────────────────────────────────────────
+	// REDIS_HOST / REDIS_PORT / REDIS_PASSWORD
+	if Conf.RedisConfig == nil {
+		Conf.RedisConfig = &RedisConfig{}
+	}
+	if v := os.Getenv("REDIS_HOST"); v != "" {
+		Conf.RedisConfig.Host = v
+	}
+	if v := os.Getenv("REDIS_PORT"); v != "" {
+		if p := envInt(v); p > 0 {
+			Conf.RedisConfig.Port = p
+		}
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		Conf.RedisConfig.Password = v
+	}
+
+	// ── Embedding API key 覆盖 ──────────────────────────────────────
+	if key := os.Getenv("VOLCANO_EMBED_API_KEY"); key != "" {
+		if Conf.MemoryConfig == nil {
+			Conf.MemoryConfig = &MemoryConfig{}
+		}
+		if Conf.MemoryConfig.Embedder == nil {
+			Conf.MemoryConfig.Embedder = &EmbedderConfig{}
+		}
+		Conf.MemoryConfig.Embedder.APIKey = key
+	}
+
+	// ── Milvus 地址覆盖 ─────────────────────────────────────────────
+	// MILVUS_ADDRESS=host:19530  或  MILVUS_HOST + MILVUS_PORT
+	if Conf.MemoryConfig == nil {
+		Conf.MemoryConfig = &MemoryConfig{}
+	}
+	if Conf.MemoryConfig.Milvus == nil {
+		Conf.MemoryConfig.Milvus = &MilvusConfig{}
+	}
+	if addr := os.Getenv("MILVUS_ADDRESS"); addr != "" {
+		Conf.MemoryConfig.Milvus.Address = addr
+	} else if host := os.Getenv("MILVUS_HOST"); host != "" {
+		port := "19530"
+		if p := os.Getenv("MILVUS_PORT"); p != "" {
+			port = p
+		}
+		Conf.MemoryConfig.Milvus.Address = host + ":" + port
 	}
 
 	viper.WatchConfig()

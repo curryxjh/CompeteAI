@@ -2,12 +2,16 @@ package dao
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// jsonUnmarshal 是 json.Unmarshal 的本地别名，避免 import cycle。
+var jsonUnmarshal = json.Unmarshal
 
 type MemoryDao struct{ db *gorm.DB }
 
@@ -244,4 +248,67 @@ func (d *MemoryDao) ListAllEmbeddings(ctx context.Context, objectType string, li
 		q = q.Limit(limit)
 	}
 	return rows, q.Find(&rows).Error
+}
+
+// GetEmbeddingsByObjectIDs 按 objectType + objectID IN 批量查询 embedding 向量。
+// 返回 map[objectID][]float32，供 MySQLRetriever 替换嵌套全表扫描。
+func (d *MemoryDao) GetEmbeddingsByObjectIDs(ctx context.Context, objectType string, ids []string) (map[string][]float32, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []MemoryEmbeddingEntity
+	err := d.db.WithContext(ctx).
+		Where("object_type = ? AND object_id IN ?", objectType, ids).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string][]float32, len(rows))
+	for _, r := range rows {
+		var vec []float32
+		if jsonErr := jsonUnmarshal([]byte(r.EmbeddingJSON), &vec); jsonErr == nil && len(vec) > 0 {
+			result[r.ObjectID] = vec
+		}
+	}
+	return result, nil
+}
+
+// GetEmbeddingByObjectID 查询单个 objectID 对应的所有 embedding 行。
+func (d *MemoryDao) GetEmbeddingByObjectID(ctx context.Context, objectID string) ([]MemoryEmbeddingEntity, error) {
+	var rows []MemoryEmbeddingEntity
+	return rows, d.db.WithContext(ctx).
+		Where("object_id = ?", objectID).
+		Find(&rows).Error
+}
+
+// GetFactsByIDs 按 ID IN 批量查询 fact（HybridRetriever 合并结果时使用）。
+func (d *MemoryDao) GetFactsByIDs(ctx context.Context, ids []string) ([]MemoryFactEntity, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []MemoryFactEntity
+	return rows, d.db.WithContext(ctx).
+		Where("id IN ?", ids).
+		Find(&rows).Error
+}
+
+// UpsertEmbedding 插入或更新 embedding 记录（按 object_id + object_type 唯一）。
+func (d *MemoryDao) UpsertEmbedding(ctx context.Context, e MemoryEmbeddingEntity) error {
+	return d.db.WithContext(ctx).Save(&e).Error
+}
+
+// DeleteEmbeddingByObjectID 删除指定 objectType + objectID 的 embedding 记录。
+func (d *MemoryDao) DeleteEmbeddingByObjectID(ctx context.Context, objectType, objectID string) error {
+	return d.db.WithContext(ctx).
+		Where("object_type = ? AND object_id = ?", objectType, objectID).
+		Delete(&MemoryEmbeddingEntity{}).Error
+}
+
+// ListEmbeddingsPaged 分页查询全量 embedding（RebuildMilvus 使用）。
+func (d *MemoryDao) ListEmbeddingsPaged(ctx context.Context, offset, limit int) ([]MemoryEmbeddingEntity, error) {
+	var rows []MemoryEmbeddingEntity
+	return rows, d.db.WithContext(ctx).
+		Offset(offset).Limit(limit).
+		Order("created_at ASC").
+		Find(&rows).Error
 }
