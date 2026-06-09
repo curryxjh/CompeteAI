@@ -79,16 +79,12 @@ func (a *QA) Run(ctx context.Context, input RunInput, bb state.Blackboard) (RunO
 		})
 	}
 
-	// 事实核验：摘要关键词是否在来源 excerpt 中出现
-	if report.Summary != "" && len(report.Sources) > 0 {
-		if !claimSupportedBySources(report.Summary, report.Sources) {
-			score -= 10
-			issues = append(issues, protocol.Issue{
-				ID: uuid.NewString(), Category: protocol.IssueUnsupportedClaim,
-				Location: "report.summary", Problem: "执行摘要缺少来源支撑",
-				Suggestion: "Analyst 需补充可追溯依据或改写表述", Severity: "medium",
-			})
-			EmitProgress(ctx, "note", "摘要结论未能匹配来源 excerpt", "done")
+	deductions, evidenceIssues := validateReportEvidence(report, meta.Competitors)
+	score -= deductions
+	issues = append(issues, evidenceIssues...)
+	for _, iss := range evidenceIssues {
+		if iss.Category == protocol.IssueUnsupportedClaim {
+			EmitProgress(ctx, "note", "证据校验："+iss.Problem, "done")
 		}
 	}
 
@@ -153,6 +149,7 @@ func qaTargetAgentForIssues(issues []protocol.Issue) domain.AgentName {
 		agent    domain.AgentName
 	}{
 		{protocol.IssueSourceMissing, domain.AgentCollector},
+		{protocol.IssueMissingSourceRef, domain.AgentAnalyst},
 		{protocol.IssueAnalysisIncomplete, domain.AgentAnalyst},
 		{protocol.IssuePricingMissing, domain.AgentAnalyst},
 		{protocol.IssueUnsupportedClaim, domain.AgentAnalyst},

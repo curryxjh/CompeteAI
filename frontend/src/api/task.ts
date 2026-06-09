@@ -19,6 +19,17 @@ export interface AgentThinkingEvent {
   status?: 'running' | 'done'
 }
 
+export interface ClarificationEvent {
+  question?: string
+  agent?: string
+}
+
+export interface RejectionEvent {
+  fromAgent?: string
+  toAgent?: string
+  reason?: string
+}
+
 export interface TaskStreamHandlers {
   onStarted?: (data: { status?: TaskStatus; progress?: number; agentStates?: AgentState[] }) => void
   onAgentState?: (data: AgentState & { progress?: number; agent?: string }) => void
@@ -27,8 +38,8 @@ export interface TaskStreamHandlers {
   onTaskStatus?: (data: { status?: TaskStatus; progress?: number }) => void
   onComplete?: (data: { status?: TaskStatus; progress?: number }) => void
   onFailed?: (data: { message?: string }) => void
-  onClarification?: () => void
-  onRejection?: () => void
+  onClarification?: (data: ClarificationEvent) => void
+  onRejection?: (data: RejectionEvent) => void
 }
 
 export function subscribeTaskStream(
@@ -60,11 +71,11 @@ export function subscribeTaskStream(
     handlers.onFailed?.(JSON.parse(e.data))
     es.close()
   })
-  es.addEventListener('clarification', () => {
-    handlers.onClarification?.()
+  es.addEventListener('clarification', (event) => {
+    handlers.onClarification?.(JSON.parse(event.data))
   })
-  es.addEventListener('rejection', () => {
-    handlers.onRejection?.()
+  es.addEventListener('rejection', (event) => {
+    handlers.onRejection?.(JSON.parse(event.data))
   })
   es.onerror = () => {
     es.close()

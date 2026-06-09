@@ -82,6 +82,14 @@ export interface FeatureRow {
   sourceIds?: Record<string, string[]>
 }
 
+export interface FeatureTreeNode {
+  name: string
+  description?: string
+  supported?: boolean
+  sourceIds?: string[]
+  children?: FeatureTreeNode[]
+}
+
 export interface PricingTier {
   name: string
   price: string
@@ -91,6 +99,7 @@ export interface PricingTier {
 export interface PricingInfo {
   competitor: string
   tiers: PricingTier[]
+  sourceIds?: string[]
 }
 
 export interface UserPersona {
@@ -98,6 +107,7 @@ export interface UserPersona {
   segments: string[]
   painPoints: string[]
   useCases: string[]
+  sourceIds?: string[]
 }
 
 export interface Report {
@@ -108,9 +118,17 @@ export interface Report {
   summary: string
   swot: Record<string, SWOTAnalysis>
   features: FeatureRow[]
+  featureTree?: Record<string, FeatureTreeNode[]>
   pricing: PricingInfo[]
   personas: UserPersona[]
   sources: Record<string, SourceRef>
+}
+
+export interface TraceStep {
+  kind: string
+  content: string
+  status?: string
+  toolName?: string
 }
 
 export interface TraceNode {
@@ -126,6 +144,7 @@ export interface TraceNode {
   isRetry?: boolean
   isRejection?: boolean
   parentId?: string
+  steps?: TraceStep[]
 }
 
 export interface Trace {
