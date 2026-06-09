@@ -131,11 +131,12 @@ type CollectorOutput struct {
 // --- analysis.* ---
 
 type AnalysisOutput struct {
-	Summary  string                         `json:"summary"`
-	SWOT     map[string]domain.SWOTAnalysis `json:"swot"`
-	Features []domain.FeatureRow            `json:"features"`
-	Pricing  []domain.PricingInfo           `json:"pricing"`
-	Personas []domain.UserPersona           `json:"personas"`
+	Summary     string                              `json:"summary"`
+	SWOT        map[string]domain.SWOTAnalysis      `json:"swot"`
+	Features    []domain.FeatureRow                   `json:"features"`
+	FeatureTree map[string][]domain.FeatureTreeNode `json:"featureTree,omitempty"`
+	Pricing     []domain.PricingInfo                  `json:"pricing"`
+	Personas    []domain.UserPersona                  `json:"personas"`
 	Versioned
 }
 

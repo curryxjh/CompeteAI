@@ -21,6 +21,7 @@ func InitWebServer(
 	mdls []gin.HandlerFunc,
 	userHdl *web.UserHandler,
 	chatHdl *web.ChatHandler,
+	chatConvHdl *web.ChatConversationHandler,
 	mcpHdl *web.MCPHandler,
 	taskHdl *web.TaskHandler,
 	opsHdl *web.OpsHandler,
@@ -40,6 +41,9 @@ func InitWebServer(
 	})
 	userHdl.RegisterRoutes(server)
 	chatHdl.RegisterRoutes(server)
+	if chatConvHdl != nil {
+		chatConvHdl.RegisterRoutes(server)
+	}
 	if mcpHdl != nil {
 		mcpHdl.RegisterRoutes(server)
 	}
