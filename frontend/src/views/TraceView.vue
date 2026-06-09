@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getTrace } from '@/api/trace'
 import TraceTimeline from '@/components/trace/TraceTimeline.vue'
@@ -12,6 +12,9 @@ const taskId = computed(() => route.params.taskId as string)
 const trace = ref<Trace | null>(null)
 const loading = ref(false)
 const visibleCount = ref(99)
+const replayPlaying = ref(false)
+const replaySpeed = ref(1)
+let replayTimer: number | null = null
 
 onMounted(async () => {
   loading.value = true
@@ -27,7 +30,11 @@ const visibleNodes = computed(() =>
 )
 
 function onStep(index: number) {
-  visibleCount.value = index + 1
+  if (!trace.value) return
+  visibleCount.value = Math.max(0, Math.min(index, trace.value.nodes.length))
+  if (visibleCount.value >= trace.value.nodes.length) {
+    stopReplay()
+  }
 }
 
 function onExport() {
@@ -42,6 +49,69 @@ function onExport() {
   a.click()
   URL.revokeObjectURL(url)
 }
+
+function startReplay() {
+  if (!trace.value || !trace.value.nodes.length) return
+  if (visibleCount.value >= trace.value.nodes.length) {
+    visibleCount.value = 0
+  }
+  replayPlaying.value = true
+  scheduleReplay()
+}
+
+function stopReplay() {
+  replayPlaying.value = false
+  if (replayTimer !== null) {
+    window.clearInterval(replayTimer)
+    replayTimer = null
+  }
+}
+
+function resetReplay() {
+  stopReplay()
+  visibleCount.value = 0
+}
+
+function onReplaySpeed(value: number) {
+  replaySpeed.value = value
+}
+
+function scheduleReplay() {
+  stopReplay()
+  if (!trace.value || !trace.value.nodes.length) return
+  replayPlaying.value = true
+  const delay = Math.max(220, Math.floor(1200 / replaySpeed.value))
+  replayTimer = window.setInterval(() => {
+    if (!trace.value) {
+      stopReplay()
+      return
+    }
+    if (visibleCount.value >= trace.value.nodes.length) {
+      stopReplay()
+      return
+    }
+    visibleCount.value += 1
+    if (visibleCount.value >= trace.value.nodes.length) {
+      stopReplay()
+    }
+  }, delay)
+}
+
+watch(replaySpeed, () => {
+  if (replayPlaying.value) {
+    scheduleReplay()
+  }
+})
+
+watch(
+  () => taskId.value,
+  () => {
+    stopReplay()
+    visibleCount.value = 99
+  },
+)
+
+onUnmounted(stopReplay)
 </script>
 
 <template>
@@ -60,7 +130,18 @@ function onExport() {
     </header>
 
     <template v-if="trace">
-      <TraceReplay @step="onStep" @export="onExport" />
+      <TraceReplay
+        :playing="replayPlaying"
+        :speed="replaySpeed"
+        :step-index="visibleCount"
+        :max-steps="trace.nodes.length"
+        @play="startReplay"
+        @pause="stopReplay"
+        @step="onStep"
+        @reset="resetReplay"
+        @speed="onReplaySpeed"
+        @export="onExport"
+      />
       <TokenUsageChart :nodes="trace.nodes" />
       <section class="panel trace-panel">
         <TraceTimeline :nodes="visibleNodes" />

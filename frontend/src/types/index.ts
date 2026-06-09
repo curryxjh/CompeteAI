@@ -28,6 +28,14 @@ export interface AgentState {
   finishedAt?: string
 }
 
+export interface TaskToolActivity {
+  agent?: AgentName
+  toolName: string
+  status: 'running' | 'done' | 'error'
+  summary?: string
+  updatedAt: string
+}
+
 export interface Task {
   id: string
   title: string
@@ -39,6 +47,8 @@ export interface Task {
   createdAt: string
   updatedAt?: string
   errorMessage?: string
+  toolStepCount?: number
+  latestToolActivity?: TaskToolActivity
 }
 
 export interface CreateTaskPayload {

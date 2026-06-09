@@ -3,8 +3,9 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 import * as taskApi from '@/api/task'
+import { toolDisplayName } from '@/utils/markdown'
 
-import type { AgentState, CreateTaskPayload, Task, TaskStatus } from '@/types'
+import type { AgentState, CreateTaskPayload, Task, TaskStatus, TaskToolActivity } from '@/types'
 
 
 
@@ -120,8 +121,21 @@ export const useTaskStore = defineStore('task', () => {
     })
 
     es.addEventListener('tool_step', (e) => {
-      // 预留：Dashboard 可扩展展示工具步骤
-      void JSON.parse(e.data)
+      const data = JSON.parse(e.data) as {
+        tool_name?: string
+        tool_args?: string
+        tool_result?: string
+        status?: 'running' | 'done' | 'error'
+        agent?: string
+      }
+      if (!data.tool_name || !data.status) return
+      updateTaskTool(taskId, {
+        agent: data.agent as TaskToolActivity['agent'],
+        toolName: data.tool_name,
+        status: data.status,
+        summary: summarizeToolStep(data),
+        updatedAt: new Date().toISOString(),
+      })
     })
 
 
@@ -222,6 +236,38 @@ export const useTaskStore = defineStore('task', () => {
 
   }
 
+  function updateTaskTool(taskId: string, tool: TaskToolActivity) {
+
+    const idx = tasks.value.findIndex((t) => t.id === taskId)
+
+    if (idx < 0) return
+
+    const task = tasks.value[idx]
+
+    tasks.value[idx] = {
+      ...task,
+      toolStepCount: (task.toolStepCount ?? 0) + (tool.status === 'running' ? 1 : 0),
+      latestToolActivity: tool,
+    }
+
+  }
+
+  function summarizeToolStep(step: {
+    tool_name?: string
+    tool_args?: string
+    tool_result?: string
+  }) {
+    const label = toolDisplayName(step.tool_name)
+    const arg = step.tool_args ?? ''
+    const query = arg.match(/^query:\s*(.+)/m)?.[1]
+    if (query) return `${label} · ${query}`
+    const url = arg.match(/^url:\s*(.+)/m)?.[1]
+    if (url) return `${label} · ${url}`
+    const firstLine = step.tool_result?.split('\n').find((line) => line.trim())
+    if (firstLine) return `${label} · ${firstLine.replace(/^#+\s*/, '').replace(/\*\*/g, '')}`
+    return label
+  }
+
 
 
   function closeSSE(taskId: string) {
@@ -315,5 +361,4 @@ export const useTaskStore = defineStore('task', () => {
   }
 
 })
-
 
