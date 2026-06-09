@@ -86,7 +86,38 @@ func FormatAnalysisMarkdown(competitors []string, out state.AnalysisOutput) stri
 		}
 	}
 
+	if len(out.FeatureTree) > 0 {
+		sb.WriteString("### 功能树\n\n")
+		for comp, nodes := range out.FeatureTree {
+			sb.WriteString(fmt.Sprintf("**%s**\n", comp))
+			writeFeatureTree(&sb, nodes, 0)
+			sb.WriteString("\n")
+		}
+	}
+
 	return strings.TrimSpace(sb.String())
+}
+
+func writeFeatureTree(sb *strings.Builder, nodes []domain.FeatureTreeNode, depth int) {
+	indent := strings.Repeat("  ", depth)
+	for _, n := range nodes {
+		flag := "?"
+		if n.Supported != nil {
+			if *n.Supported {
+				flag = "✓"
+			} else {
+				flag = "✗"
+			}
+		}
+		sb.WriteString(fmt.Sprintf("%s- [%s] %s", indent, flag, n.Name))
+		if n.Description != "" {
+			sb.WriteString(" — " + n.Description)
+		}
+		sb.WriteString("\n")
+		if len(n.Children) > 0 {
+			writeFeatureTree(sb, n.Children, depth+1)
+		}
+	}
 }
 
 func writeSWOTSection(sb *strings.Builder, title string, items []domain.SWOTItem) {

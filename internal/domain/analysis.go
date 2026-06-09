@@ -91,6 +91,15 @@ type FeatureRow struct {
 	SourceIDs map[string][]string            `json:"sourceIds,omitempty"`
 }
 
+// FeatureTreeNode 竞品功能树节点（层级结构）。
+type FeatureTreeNode struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Supported   *bool             `json:"supported,omitempty"`
+	SourceIDs   []string          `json:"sourceIds,omitempty"`
+	Children    []FeatureTreeNode `json:"children,omitempty"`
+}
+
 type PricingTier struct {
 	Name     string   `json:"name"`
 	Price    string   `json:"price"`
@@ -100,6 +109,7 @@ type PricingTier struct {
 type PricingInfo struct {
 	Competitor string        `json:"competitor"`
 	Tiers      []PricingTier `json:"tiers"`
+	SourceIDs  []string      `json:"sourceIds,omitempty"`
 }
 
 type UserPersona struct {
@@ -107,6 +117,7 @@ type UserPersona struct {
 	Segments    []string `json:"segments"`
 	PainPoints  []string `json:"painPoints"`
 	UseCases    []string `json:"useCases"`
+	SourceIDs   []string `json:"sourceIds,omitempty"`
 }
 
 type SourceRef struct {
@@ -117,16 +128,25 @@ type SourceRef struct {
 }
 
 type Report struct {
-	TaskID      string                    `json:"taskId"`
-	Title       string                    `json:"title"`
-	GeneratedAt string                    `json:"generatedAt"`
-	QAScore     int                       `json:"qaScore"`
-	Summary     string                    `json:"summary"`
-	SWOT        map[string]SWOTAnalysis   `json:"swot"`
-	Features    []FeatureRow              `json:"features"`
-	Pricing     []PricingInfo             `json:"pricing"`
-	Personas    []UserPersona             `json:"personas"`
-	Sources     map[string]SourceRef      `json:"sources"`
+	TaskID      string                       `json:"taskId"`
+	Title       string                       `json:"title"`
+	GeneratedAt string                       `json:"generatedAt"`
+	QAScore     int                          `json:"qaScore"`
+	Summary     string                       `json:"summary"`
+	SWOT        map[string]SWOTAnalysis      `json:"swot"`
+	Features    []FeatureRow                 `json:"features"`
+	FeatureTree map[string][]FeatureTreeNode `json:"featureTree,omitempty"`
+	Pricing     []PricingInfo                `json:"pricing"`
+	Personas    []UserPersona                `json:"personas"`
+	Sources     map[string]SourceRef         `json:"sources"`
+}
+
+// TraceStep Agent 运行内的细粒度步骤（thinking / tool / note 等）。
+type TraceStep struct {
+	Kind     string `json:"kind"`
+	Content  string `json:"content"`
+	Status   string `json:"status,omitempty"`
+	ToolName string `json:"toolName,omitempty"`
 }
 
 type TraceNode struct {
@@ -142,6 +162,7 @@ type TraceNode struct {
 	IsRetry     bool                   `json:"isRetry,omitempty"`
 	IsRejection bool                   `json:"isRejection,omitempty"`
 	ParentID    string                 `json:"parentId,omitempty"`
+	Steps       []TraceStep            `json:"steps,omitempty"`
 }
 
 type Trace struct {

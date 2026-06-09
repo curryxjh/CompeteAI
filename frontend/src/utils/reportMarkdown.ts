@@ -1,4 +1,4 @@
-import type { Report } from '@/types'
+import type { FeatureTreeNode, Report } from '@/types'
 
 function formatBool(v: boolean | string | undefined): string {
   if (v === true) return '✓'
@@ -14,6 +14,19 @@ function swotSection(title: string, items: { text: string }[]): string[] {
   } else {
     for (const it of items) {
       lines.push(`- ${it.text}`)
+    }
+  }
+  return lines
+}
+
+function featureTreeLines(nodes: FeatureTreeNode[], depth: number): string[] {
+  const lines: string[] = []
+  const pad = '  '.repeat(depth)
+  for (const n of nodes) {
+    const flag = n.supported === true ? '✓' : n.supported === false ? '✗' : '·'
+    lines.push(`${pad}- [${flag}] ${n.name}${n.description ? ' — ' + n.description : ''}`)
+    if (n.children?.length) {
+      lines.push(...featureTreeLines(n.children, depth + 1))
     }
   }
   return lines
@@ -57,6 +70,14 @@ export function reportToMarkdown(report: Report): string {
       )
     }
     lines.push('')
+  }
+
+  if (report.featureTree && Object.keys(report.featureTree).length) {
+    lines.push('## 功能树', '')
+    for (const [comp, nodes] of Object.entries(report.featureTree)) {
+      lines.push(`### ${comp}`, '')
+      lines.push(...featureTreeLines(nodes, 0), '')
+    }
   }
 
   if (report.pricing.length) {

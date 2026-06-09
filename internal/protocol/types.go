@@ -62,6 +62,7 @@ const (
 	IssuePricingMissing      = "pricing_missing"
 	IssueReportStructure     = "report_structure"
 	IssueUnsupportedClaim    = "unsupported_claim"
+	IssueMissingSourceRef    = "missing_source_ref"
 )
 
 // Issue QA 打回结构化问题。

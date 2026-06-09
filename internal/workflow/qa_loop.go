@@ -17,7 +17,8 @@ func (e *Engine) executeAgent(ctx context.Context, taskID string, name domain.Ag
 	if !ok {
 		return agent.RunOutput{}, fmt.Errorf("agent %s not registered", name)
 	}
-	agentCtx := agent.WithToolStepReporter(ctx, func(ev agent.ToolStepEvent) {
+	agentCtx, traceSess := agent.WithTraceSession(ctx)
+	agentCtx = agent.WithToolStepReporter(agentCtx, func(ev agent.ToolStepEvent) {
 		args := ev.Args
 		if formatted := eino.FormatToolArgsForUI(ev.Args); formatted != "" {
 			args = formatted
@@ -30,13 +31,41 @@ func (e *Engine) executeAgent(ctx context.Context, taskID string, name domain.Ag
 			"tool_name": ev.ToolName, "tool_args": args,
 			"tool_result": result, "status": ev.Status, "agent": string(name),
 		})
+		traceSess.AppendStep("tool", args, ev.Status, ev.ToolName)
+		if ev.Status == "done" && result != "" {
+			traceSess.AppendStep("tool_result", truncate(result, 500), "done", ev.ToolName)
+		}
 	})
 	agentCtx = agent.WithAgentProgressReporter(agentCtx, func(ev agent.AgentProgressEvent) {
 		e.hub.Publish(taskID, "agent_thinking", map[string]any{
 			"agent": string(name), "kind": ev.Kind, "content": ev.Content, "status": ev.Status,
 		})
+		traceSess.AppendStep(ev.Kind, ev.Content, ev.Status, "")
 	})
-	return e.runAgentWithRetry(agentCtx, ag, input, bb)
+	out, err := e.runAgentWithRetry(agentCtx, ag, input, bb)
+	if traceSess != nil {
+		if out.Metadata == nil {
+			out.Metadata = map[string]any{}
+		}
+		out.Metadata["trace_steps"] = traceSess.Steps
+		out.Metadata["duration_ms"] = traceSess.DurationMs()
+		tokenCount := 0
+		if hint, ok := out.Metadata["token_hint"].(int); ok {
+			tokenCount = hint
+		}
+		if tokenCount == 0 {
+			tokenCount = estimateTokens(out.Summary)
+		}
+		out.Metadata["token_count"] = tokenCount
+	}
+	return out, err
+}
+
+func estimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	return len([]rune(text)) / 2
 }
 
 // handleQAQuery QA 对单条结论发起追问 → Analyst 局部回复。
