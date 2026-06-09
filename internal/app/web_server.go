@@ -32,6 +32,10 @@ func InitWebServer() *gin.Engine {
 	toolRegistry := ioc.InitFirecrawlTools()
 	chatService := ioc.InitChatService(toolRegistry)
 	chatHandler := web.NewChatHandler(chatService)
+	chatDao := dao.NewChatDao(db)
+	chatRepo := repository.NewChatRepository(chatDao)
+	chatConvService := service.NewChatConversationService(chatRepo)
+	chatConvHandler := web.NewChatConversationHandler(chatConvService)
 	mcpHandler := web.NewMCPHandler(toolRegistry)
 	taskDao := dao.NewTaskDao(db)
 	taskRepository := repository.NewTaskRepository(taskDao)
@@ -57,7 +61,7 @@ func InitWebServer() *gin.Engine {
 	traceService := service.NewTraceService(traceRepository)
 	traceHandler := web.NewTraceHandler(traceService)
 	agentHandler := web.NewAgentHandler(registry)
-	return ioc.InitWebServer(mdls, userHandler, chatHandler, mcpHandler, taskHandler, opsHandler, memoryHandler, reportHandler, traceHandler, agentHandler, outboxPublisher)
+	return ioc.InitWebServer(mdls, userHandler, chatHandler, chatConvHandler, mcpHandler, taskHandler, opsHandler, memoryHandler, reportHandler, traceHandler, agentHandler, outboxPublisher)
 }
 
 // RunAPI 启动 API 进程。

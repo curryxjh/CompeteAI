@@ -59,14 +59,8 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 		})
 	}
 
-	systemPrompt := `你是竞品分析专家。输出严格 JSON，不要 markdown 代码块。
-{
-  "summary": "执行摘要",
-  "swot": { "竞品名": { "strengths":[{"text":"..."}], "weaknesses":[], "opportunities":[], "threats":[] } },
-  "features": [{ "feature": "功能", "values": { "A": true, "B": false } }],
-  "pricing": [{ "competitor": "名", "tiers": [{ "name": "套餐", "price": "$10/月", "features": [] }] }],
-  "personas": [{ "competitor": "名", "segments": [], "painPoints": [], "useCases": [] }]
-}`
+	sourceCatalog := formatSourceCatalog(coll.Sources)
+	systemPrompt := analystSystemPrompt
 
 	userPrompt := fmt.Sprintf(`任务：%s
 竞品：%s
@@ -74,7 +68,7 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 修正要求：%s
 
 资料：
-%s%s`, meta.Title, strings.Join(meta.Competitors, ", "), strings.Join(meta.Dimensions, ", "), rework, coll.Materials, MemoryPromptSuffix(input))
+%s%s%s`, meta.Title, strings.Join(meta.Competitors, ", "), strings.Join(meta.Dimensions, ", "), rework, coll.Materials, sourceCatalog, MemoryPromptSuffix(input))
 
 	EmitProgress(ctx, "path", "读取资料 → 功能矩阵 → SWOT → 定价 → 用户画像", "done")
 	EmitProgress(ctx, "note", fmt.Sprintf("已加载 %d 个来源，竞品：%s", len(coll.Sources), strings.Join(meta.Competitors, " vs ")), "done")
@@ -113,6 +107,11 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 	if partial.SWOT == nil {
 		partial.SWOT = map[string]domain.SWOTAnalysis{}
 	}
+	if partial.FeatureTree == nil {
+		partial.FeatureTree = map[string][]domain.FeatureTreeNode{}
+	}
+
+	enrichAnalysisSources(&partial, coll.Sources)
 
 	if err := store.SaveAnalysisOutput(ctx, partial); err != nil {
 		return RunOutput{}, err
@@ -122,8 +121,8 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 	if summary == "" {
 		summary = "结构化分析完成"
 	}
-	EmitProgress(ctx, "note", fmt.Sprintf("分析完成：SWOT %d 项、功能 %d 行、定价 %d 组",
-		len(partial.SWOT), len(partial.Features), len(partial.Pricing)), "done")
+	EmitProgress(ctx, "note", fmt.Sprintf("分析完成：SWOT %d 项、功能 %d 行、功能树 %d 组、定价 %d 组",
+		len(partial.SWOT), len(partial.Features), len(partial.FeatureTree), len(partial.Pricing)), "done")
 	EmitProgress(ctx, "analysis", FormatAnalysisMarkdown(meta.Competitors, partial), "done")
 
 	swotKeys := make([]string, 0, len(partial.SWOT))

@@ -229,11 +229,9 @@ func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, ms
 		return e.failTask(ctx, store, task, trace, traceID, string(name), runErr.Error())
 	}
 
-	trace.Nodes = append(trace.Nodes, domain.TraceNode{
-		ID: fmt.Sprintf("n%d", len(trace.Nodes)+1), Agent: name,
-		Label: ag.Card().DisplayName, Status: out.Status,
-		Output: truncate(out.Summary, 300), Metadata: out.Metadata,
-	})
+	trace.Nodes = append(trace.Nodes, buildTraceNode(
+		fmt.Sprintf("n%d", len(trace.Nodes)+1), name, ag.Card().DisplayName, out.Status, out.Summary, out.Metadata,
+	))
 	_ = e.traces.Save(ctx, trace)
 
 	agentMsg := protocol.NewAgentMessage(msg.TaskID, traceID, name, protocol.MessageType(out.MessageType), out.Payload, out.Artifacts)

@@ -31,7 +31,7 @@ func NewRegistry(deps Deps) *Registry {
 	r.agents[domain.AgentCoordinator] = NewCoordinator()
 	r.agents[domain.AgentCollector] = NewCollector(tools)
 	r.agents[domain.AgentAnalyst] = NewAnalyst(chat)
-	r.agents[domain.AgentWriter] = NewWriter()
+	r.agents[domain.AgentWriter] = NewWriter(chat)
 	r.agents[domain.AgentQA] = NewQA()
 	return r
 }
