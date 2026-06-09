@@ -21,6 +21,7 @@ func (e *Engine) ensureMemoryScopes(ctx context.Context, task domain.Task) {
 	_ = mem.EnsureScopes(ctx, memory.EnsureScopesRequest{
 		TaskID: task.ID, ProjectID: projectID,
 		Competitors: task.Competitors,
+		UserID:      UserIDFromCtx(ctx),
 	})
 }
 
@@ -34,6 +35,7 @@ func (e *Engine) buildMemoryContext(ctx context.Context, taskID, agentName strin
 		TaskID: taskID, Agent: agentName, TriggerType: trigger,
 		Competitors: meta.Competitors, Dimensions: meta.Dimensions,
 		Query: meta.Title, ProjectID: defaultMemoryProjectID(),
+		UserID: UserIDFromCtx(ctx),
 	}
 	ctxOut, err := mem.BuildAgentContext(ctx, req)
 	if err != nil {

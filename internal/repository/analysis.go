@@ -190,6 +190,7 @@ func taskToEntity(task domain.Task) (dao.TaskEntity, error) {
 		Progress:     task.Progress,
 		AgentStates:  string(agentStates),
 		ErrorMessage: task.ErrorMessage,
+		UserID:       task.UserID,
 	}, nil
 }
 
@@ -217,6 +218,7 @@ func entityToTask(entity dao.TaskEntity) (domain.Task, error) {
 		Progress:     entity.Progress,
 		AgentStates:  agentStates,
 		ErrorMessage: entity.ErrorMessage,
+		UserID:       entity.UserID,
 		CreatedAt:    entity.CreatedAt.Format(time.RFC3339),
 	}
 	if !entity.UpdatedAt.IsZero() {

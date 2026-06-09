@@ -34,6 +34,8 @@ type MemoryService interface {
 	ResolveEntities(ctx context.Context, req ResolveEntitiesRequest) ([]Entity, error)
 	InvalidateFact(ctx context.Context, factID string, reason string) error
 	ListPreferences(ctx context.Context, scopeType ScopeType, scopeKey string) ([]Preference, error)
+	// Close 释放向量数据库连接等资源。
+	Close() error
 }
 
 type EnsureScopesRequest struct {
@@ -249,6 +251,10 @@ type RetrievalRequest struct {
 	Query       string
 	TaskID      string
 	ScopeIDs    []string
+	// ScopeKeys 对应 ScopeIDs 的 scope_key 值（如 "project:compete-ai"）。
+	// HybridRetriever 使用 ScopeKeys 在 Milvus 中做 scalar pre-filter，
+	// MySQLRetriever 仍使用 ScopeIDs（UUID）。两者可各自独立为空。
+	ScopeKeys   []string
 	Competitors []string
 	Limit       int
 }

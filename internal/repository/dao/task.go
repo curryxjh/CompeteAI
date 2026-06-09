@@ -24,6 +24,7 @@ type TaskEntity struct {
 	Progress     int
 	AgentStates  string    `gorm:"type:json"`
 	ErrorMessage string    `gorm:"type:text"`
+	UserID       int64     `gorm:"column:user_id;default:0"`
 	CreatedAt    time.Time `gorm:"autoCreateTime"`
 	UpdatedAt    time.Time `gorm:"autoUpdateTime"`
 }

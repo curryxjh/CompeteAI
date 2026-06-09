@@ -51,16 +51,18 @@ type AgentState struct {
 }
 
 type Task struct {
-	ID           string     `json:"id"`
-	Title        string     `json:"title"`
-	Competitors  []string   `json:"competitors"`
-	Dimensions   []string   `json:"dimensions"`
-	Status       TaskStatus `json:"status"`
-	Progress     int        `json:"progress"`
+	ID           string       `json:"id"`
+	Title        string       `json:"title"`
+	Competitors  []string     `json:"competitors"`
+	Dimensions   []string     `json:"dimensions"`
+	Status       TaskStatus   `json:"status"`
+	Progress     int          `json:"progress"`
 	AgentStates  []AgentState `json:"agentStates"`
-	CreatedAt    string     `json:"createdAt"`
-	UpdatedAt    string     `json:"updatedAt,omitempty"`
-	ErrorMessage string     `json:"errorMessage,omitempty"`
+	CreatedAt    string       `json:"createdAt"`
+	UpdatedAt    string       `json:"updatedAt,omitempty"`
+	ErrorMessage string       `json:"errorMessage,omitempty"`
+	// UserID 创建任务的用户 ID，用于记忆作用域关联
+	UserID int64 `json:"userId,omitempty"`
 }
 
 type CreateTaskPayload struct {

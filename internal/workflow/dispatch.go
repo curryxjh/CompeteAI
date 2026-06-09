@@ -16,6 +16,20 @@ import (
 
 var ErrAwaitingClarification = fmt.Errorf("awaiting user clarification")
 
+// contextKeyUserID 用于在 context 中传递登录用户 ID。
+type contextKeyUserID struct{}
+
+// WithUserID 将 userID 注入 context，供后续记忆作用域使用。
+func WithUserID(ctx context.Context, userID int64) context.Context {
+	return context.WithValue(ctx, contextKeyUserID{}, userID)
+}
+
+// UserIDFromCtx 从 context 取出 userID（未设置时返回 0）。
+func UserIDFromCtx(ctx context.Context) int64 {
+	v, _ := ctx.Value(contextKeyUserID{}).(int64)
+	return v
+}
+
 func taskCancelKey(taskID string) string {
 	return fmt.Sprintf("compete:task:%s:cancelled", taskID)
 }
@@ -60,6 +74,10 @@ func (e *Engine) withIdempotent(ctx context.Context, msg protocol.MessageEnvelop
 func (e *Engine) PrepareTask(ctx context.Context, task domain.Task, traceID string) (string, error) {
 	if traceID == "" {
 		traceID = uuid.NewString()
+	}
+	// 将任务归属用户注入 context，使记忆模块能关联用户级作用域
+	if task.UserID > 0 {
+		ctx = WithUserID(ctx, task.UserID)
 	}
 	bb := e.blackboard(task.ID)
 	store := state.ForTask(bb, task.ID)

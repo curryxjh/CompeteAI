@@ -18,6 +18,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// userIDFromCtx 从 context 取出登录用户 ID，依赖 workflow 包的实现。
+func userIDFromCtx(ctx context.Context) int64 {
+	return workflow.UserIDFromCtx(ctx)
+}
+
 type TaskService interface {
 	Create(ctx context.Context, payload domain.CreateTaskPayload) (domain.Task, error)
 	List(ctx context.Context) ([]domain.Task, error)
@@ -90,6 +95,7 @@ func (s *taskService) Create(ctx context.Context, payload domain.CreateTaskPaylo
 		Status: domain.TaskStatusQueued, Progress: 0,
 		AgentStates: domain.DefaultAgentStates(),
 		CreatedAt: now, UpdatedAt: now,
+		UserID: userIDFromCtx(ctx),
 	}
 	traceID := uuid.NewString()
 	if err := repository.CreateTaskWithOutbox(ctx, s.db, task, traceID); err != nil {

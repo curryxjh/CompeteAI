@@ -5,6 +5,8 @@ import (
 	"CompeteAI/internal/eventlog"
 	"CompeteAI/internal/repository"
 	"CompeteAI/internal/service"
+	ijwt "CompeteAI/internal/web/jwt"
+	"CompeteAI/internal/workflow"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,7 +45,14 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "invalid request"})
 		return
 	}
-	task, err := h.svc.Create(c.Request.Context(), req)
+	// 将登录用户 ID 注入 context，供记忆作用域关联使用
+	ctx := c.Request.Context()
+	if claims, ok := c.Get("claims"); ok {
+		if uc, ok := claims.(*ijwt.UserClaims); ok && uc.Uid > 0 {
+			ctx = workflow.WithUserID(ctx, uc.Uid)
+		}
+	}
+	task, err := h.svc.Create(ctx, req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
