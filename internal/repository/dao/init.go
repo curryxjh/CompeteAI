@@ -19,6 +19,7 @@ func InitTable(db *gorm.DB) error {
 			&MemorySourceEntity{}, &MemoryEvidenceLinkEntity{}, &MemoryClaimEntity{},
 			&MemoryEpisodeEntity{}, &MemoryPreferenceEntity{}, &MemoryEventEntity{},
 			&MemoryEmbeddingEntity{}, &MemoryChunkEntity{},
+			&ChatConversationEntity{}, &ChatMessageEntity{},
 		)
 	})
 	return migrateErr

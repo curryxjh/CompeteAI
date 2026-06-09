@@ -1,22 +1,35 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   streamChat,
   type ChatMessage,
   type ChatStreamEvent,
 } from '@/api/chat'
+import {
+  fromMessageRecord,
+  toMessageRecord,
+  useChatConversations,
+  welcomeMessage,
+} from '@/composables/useChatConversations'
 import { getReport } from '@/api/report'
-import { createTask, subscribeTaskStream, type AgentThinkingEvent, type TaskToolStepEvent } from '@/api/task'
+import {
+  createTask,
+  subscribeTaskStream,
+  type AgentThinkingEvent,
+  type ClarificationEvent,
+  type RejectionEvent,
+  type TaskToolStepEvent,
+} from '@/api/task'
 import { renderMarkdown, stepTypeLabel, toolDisplayName } from '@/utils/markdown'
 import { reportToMarkdown } from '@/utils/reportMarkdown'
 import { parseAnalysisRequest } from '@/utils/analysis'
-import { AGENT_LABELS, AGENT_ORDER, agentStatusIcon } from '@/utils/agent'
+import { AGENT_LABELS, AGENT_ORDER, agentStatusIcon, formatDuration } from '@/utils/agent'
 import type { AgentName, AgentRunStatus, AgentState } from '@/types'
 import AgentIcon from '@/components/ui/AgentIcon.vue'
 import StatusIcon from '@/components/ui/StatusIcon.vue'
 
-type StepType = 'thinking' | 'tool' | 'agent'
+type StepType = 'thinking' | 'tool' | 'agent' | 'event'
 type StepFilter = 'all' | AgentName
 
 interface ChatStep {
@@ -31,8 +44,14 @@ interface ChatStep {
   agentStatus?: AgentRunStatus
   parentAgent?: AgentName
   thinkingKind?: 'path' | 'note' | 'thinking' | 'output' | 'analysis'
+  eventKind?: 'clarification' | 'rejection'
   noteRunning?: boolean
   expanded?: boolean
+  createdAt?: number
+  finishedAt?: number
+  question?: string
+  targetAgent?: AgentName
+  metricsLabel?: string
 }
 
 interface UiMessage extends ChatMessage {
@@ -49,15 +68,21 @@ interface UiMessage extends ChatMessage {
   replaySpeed?: number
 }
 
-const messages = ref<UiMessage[]>([
-  {
-    id: 'welcome',
-    role: 'assistant',
-    content:
-      '你好，我是 CompeteAI 助手。你可以直接描述竞品分析任务（例如「分析 Cursor 与 GitHub Copilot 的功能、定价与 SWOT」），我会启动多 Agent 流水线并展示完整执行过程；也可以进行普通对话。',
-    steps: [],
-  },
-])
+const messages = ref<UiMessage[]>([])
+
+const {
+  conversations,
+  activeId: activeConversationId,
+  loadingList: conversationsLoading,
+  switching: conversationSwitching,
+  init: initConversations,
+  createNew: createNewConversation,
+  switchTo: switchConversationTo,
+  persist: persistConversationMessages,
+  remove: removeConversation,
+} = useChatConversations()
+
+const convSidebarOpen = ref(true)
 
 const input = ref('')
 const loading = ref(false)
@@ -77,6 +102,67 @@ function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+async function persistTurn(userMsg: UiMessage, assistantMsg: UiMessage) {
+  try {
+    await persistConversationMessages([
+      toMessageRecord(userMsg),
+      toMessageRecord(assistantMsg),
+    ])
+  } catch {
+    ElMessage.warning('对话已产生，但保存到服务器失败')
+  }
+}
+
+async function loadConversation(id: string) {
+  if (loading.value) stop()
+  closeTaskStream()
+  clearAllReplays()
+  const loaded = await switchConversationTo(id)
+  messages.value = loaded as UiMessage[]
+  scrollToBottom()
+}
+
+async function startNewConversation() {
+  if (loading.value) stop()
+  closeTaskStream()
+  clearAllReplays()
+  await createNewConversation()
+  messages.value = [fromMessageRecord(welcomeMessage()) as UiMessage]
+  input.value = ''
+  scrollToBottom()
+}
+
+async function deleteConversationItem(id: string) {
+  try {
+    await ElMessageBox.confirm('确定删除该对话？删除后无法恢复。', '删除对话', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  const wasActive = activeConversationId.value === id
+  await removeConversation(id)
+  if (wasActive) {
+    if (conversations.value.length) {
+      await loadConversation(conversations.value[0]!.id)
+    } else {
+      await startNewConversation()
+    }
+  }
+  ElMessage.success('对话已删除')
+}
+
+function formatConvTime(iso: string) {
+  const d = new Date(iso)
+  const now = new Date()
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+}
+
 function initAgentSteps(): ChatStep[] {
   return AGENT_ORDER.map((name) => ({
     id: uid(),
@@ -84,6 +170,8 @@ function initAgentSteps(): ChatStep[] {
     content: '',
     agentName: name,
     agentStatus: name === 'coordinator' ? 'running' : 'pending',
+    createdAt: name === 'coordinator' ? Date.now() : undefined,
+    metricsLabel: '0 tool',
   }))
 }
 
@@ -92,12 +180,38 @@ function taskAgentStatus(msg: UiMessage, agentName: AgentName): AgentRunStatus {
   return step?.agentStatus ?? 'pending'
 }
 
-function agentActivityCount(msg: UiMessage, agentName: AgentName): number {
+function agentStep(msg: UiMessage, agentName: AgentName) {
+  return msg.steps?.find((item) => item.type === 'agent' && item.agentName === agentName)
+}
+
+function agentToolCount(msg: UiMessage, agentName: AgentName): number {
   return (
-    msg.steps?.filter(
-      (step) => step.parentAgent === agentName && (step.type === 'tool' || step.type === 'thinking'),
-    ).length ?? 0
+    msg.steps?.filter((step) => step.parentAgent === agentName && step.type === 'tool').length ?? 0
   )
+}
+
+function agentDurationMs(msg: UiMessage, agentName: AgentName): number | null {
+  const step = agentStep(msg, agentName)
+  if (!step?.createdAt) return null
+  const effectiveEnd = step.finishedAt ?? Date.now()
+  return Math.max(0, effectiveEnd - step.createdAt)
+}
+
+function agentMetricsSummary(msg: UiMessage, agentName: AgentName): string {
+  const duration = agentDurationMs(msg, agentName)
+  const tools = agentToolCount(msg, agentName)
+  const parts: string[] = []
+  if (duration !== null) parts.push(formatDuration(duration))
+  parts.push(`${tools} tool`)
+  return parts.join(' · ')
+}
+
+function refreshAgentMetrics(msg: UiMessage) {
+  for (const name of AGENT_ORDER) {
+    const step = agentStep(msg, name)
+    if (!step) continue
+    step.metricsLabel = agentMetricsSummary(msg, name)
+  }
 }
 
 function filteredSteps(msg: UiMessage): ChatStep[] {
@@ -233,14 +347,20 @@ function updateAgentStep(assistant: UiMessage, data: AgentState & { message?: st
   if (!name) return
   const step = assistant.steps.find((s) => s.type === 'agent' && s.agentName === name)
   if (!step) return
+  if (data.status === 'running' && step.agentStatus !== 'running') {
+    step.createdAt = Date.now()
+    step.finishedAt = undefined
+  }
   step.agentStatus = data.status
   if (data.message) step.content = data.message
   if (data.status === 'running') {
     step.expanded = true
   }
-  if (data.status === 'completed' || data.status === 'failed') {
+  if (data.status === 'completed' || data.status === 'failed' || data.status === 'rejected') {
+    step.finishedAt = step.finishedAt ?? Date.now()
     step.expanded = false
   }
+  refreshAgentMetrics(assistant)
 }
 
 function handleAgentThinking(assistant: UiMessage, ev: AgentThinkingEvent) {
@@ -396,9 +516,64 @@ function handleTaskToolStep(assistant: UiMessage, ev: TaskToolStepEvent) {
       expanded: false,
     })
   }
+  refreshAgentMetrics(assistant)
+}
+
+function insertProcessEvent(assistant: UiMessage, step: ChatStep) {
+  if (!assistant.steps) assistant.steps = []
+  assistant.steps.push(step)
+}
+
+function handleClarificationEvent(assistant: UiMessage, ev: ClarificationEvent) {
+  if (!assistant.steps) assistant.steps = []
+  const question = ev.question ?? '需要进一步澄清任务信息'
+  const owner = (ev.agent as AgentName | undefined) ?? 'coordinator'
+  insertProcessEvent(assistant, {
+    id: uid(),
+    type: 'event',
+    eventKind: 'clarification',
+    content: question,
+    question,
+    parentAgent: owner,
+    createdAt: Date.now(),
+    expanded: true,
+  })
+  refreshAgentMetrics(assistant)
+}
+
+function handleRejectionEvent(assistant: UiMessage, ev: RejectionEvent) {
+  if (!assistant.steps) assistant.steps = []
+  const fromAgent = ev.fromAgent as AgentName | undefined
+  const target = ev.toAgent as AgentName | undefined
+  const reason = ev.reason ?? 'QA 打回，需重做'
+  insertProcessEvent(assistant, {
+    id: uid(),
+    type: 'event',
+    eventKind: 'rejection',
+    content: reason,
+    parentAgent: fromAgent ?? 'qa',
+    targetAgent: target,
+    createdAt: Date.now(),
+    expanded: true,
+  })
+  refreshAgentMetrics(assistant)
+}
+
+function chatStepLabel(step: ChatStep): string {
+  if (step.type === 'event') {
+    return step.eventKind === 'clarification' ? '待澄清' : 'QA 打回'
+  }
+  return stepTypeLabel(step)
 }
 
 function stepSummary(step: ChatStep, max = 56): string {
+  if (step.type === 'event') {
+    if (step.eventKind === 'clarification') {
+      return truncate(step.question ?? step.content, max)
+    }
+    const target = step.targetAgent ? AGENT_LABELS[step.targetAgent] : '目标 Agent'
+    return truncate(`${target} · ${step.content}`, max)
+  }
   if (step.type === 'thinking') {
     if (step.thinkingKind === 'path') return truncate(step.content, max)
     if (step.thinkingKind === 'note') return truncate(step.content, max)
@@ -410,6 +585,7 @@ function stepSummary(step: ChatStep, max = 56): string {
   }
   if (step.type === 'agent') {
     if (step.content) return truncate(step.content, max)
+    if (step.metricsLabel) return step.metricsLabel
     if (step.agentStatus === 'running') return '执行中…'
     if (step.agentStatus === 'completed') return '已完成'
     if (step.agentStatus === 'failed') return '失败'
@@ -586,7 +762,7 @@ function clearAllReplays() {
   }
 }
 
-async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>) {
+async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>, userMsg: UiMessage) {
   if (!payload) return
 
   const assistantId = uid()
@@ -601,6 +777,7 @@ async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>
     stepFilter: 'all',
     replaySpeed: 1,
   })
+  refreshAgentMetrics(messages.value[messages.value.length - 1]!)
   loading.value = true
   scrollToBottom()
 
@@ -621,6 +798,7 @@ async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>
             updateAgentStep(assistant, st)
           }
         }
+        refreshAgentMetrics(assistant)
         scrollToBottom()
       },
       onAgentState(data) {
@@ -645,6 +823,14 @@ async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>
           assistant.content += '\n\n↩ QA 打回，正在局部重跑…'
         }
       },
+      onClarification(data) {
+        handleClarificationEvent(assistant, data)
+        scrollToBottom()
+      },
+      onRejection(data) {
+        handleRejectionEvent(assistant, data)
+        scrollToBottom()
+      },
       async onComplete() {
         assistant.streaming = false
         assistant.replayActive = false
@@ -656,6 +842,7 @@ async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>
           assistant.content += '\n\n任务已完成，但加载报告失败，请前往任务页查看。'
         }
         loading.value = false
+        await persistTurn(userMsg, assistant)
         scrollToBottom()
       },
       onFailed(data) {
@@ -665,6 +852,7 @@ async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>
         assistant.content = `任务失败：${data.message ?? '未知错误'}`
         loading.value = false
         ElMessage.error(data.message ?? '任务失败')
+        void persistTurn(userMsg, assistant)
         scrollToBottom()
       },
     })
@@ -676,10 +864,11 @@ async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>
     assistant.content = `抱歉，无法启动竞品分析任务：${msg}`
     ElMessage.error(msg)
     loading.value = false
+    void persistTurn(userMsg, assistant)
   }
 }
 
-async function sendChatMessage(text: string, assistantId: string) {
+async function sendChatMessage(text: string, assistantId: string, userMsg: UiMessage) {
   const history: ChatMessage[] = messages.value
     .filter((m) => m.id !== 'welcome' && m.id !== assistantId && !m.taskMode)
     .map(({ role, content }) => ({ role, content }))
@@ -721,6 +910,9 @@ async function sendChatMessage(text: string, assistantId: string) {
     assistant.replayActive = false
     assistant.replayVisibleCount = assistant.steps?.length ?? 0
     loading.value = false
+    if (assistant.content || assistant.steps?.length) {
+      await persistTurn(userMsg, assistant)
+    }
     scrollToBottom()
   }
 }
@@ -730,11 +922,12 @@ async function send() {
   if (!text || loading.value) return
 
   input.value = ''
-  messages.value.push({ id: uid(), role: 'user', content: text })
+  const userMsg: UiMessage = { id: uid(), role: 'user', content: text }
+  messages.value.push(userMsg)
 
   const analysisPayload = parseAnalysisRequest(text)
   if (analysisPayload) {
-    await sendAnalysisTask(analysisPayload)
+    await sendAnalysisTask(analysisPayload, userMsg)
     return
   }
 
@@ -751,7 +944,7 @@ async function send() {
   })
   loading.value = true
   scrollToBottom()
-  await sendChatMessage(text, assistantId)
+  await sendChatMessage(text, assistantId, userMsg)
 }
 
 function stop() {
@@ -770,25 +963,20 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-function clearChat() {
-  if (loading.value) stop()
-  closeTaskStream()
-  clearAllReplays()
-  messages.value = [
-    {
-      id: 'welcome',
-      role: 'assistant',
-      content: '对话已清空。继续提问吧。',
-      steps: [],
-    },
-  ]
-}
-
 function toggleStep(step: ChatStep) {
   step.expanded = !step.expanded
 }
 
-onMounted(scrollToBottom)
+onMounted(async () => {
+  try {
+    const loaded = await initConversations()
+    messages.value = loaded as UiMessage[]
+  } catch {
+    messages.value = [fromMessageRecord(welcomeMessage()) as UiMessage]
+    ElMessage.warning('无法加载历史对话，请确认已登录')
+  }
+  scrollToBottom()
+})
 onUnmounted(() => {
   closeTaskStream()
   clearAllReplays()
@@ -797,18 +985,67 @@ onUnmounted(() => {
 
 <template>
   <div class="chat-page">
+    <aside class="conv-sidebar" :class="{ collapsed: !convSidebarOpen }">
+      <div class="conv-sidebar-head">
+        <button type="button" class="btn-primary btn-new" @click="startNewConversation">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          新建对话
+        </button>
+        <button type="button" class="btn-icon" title="收起" @click="convSidebarOpen = false">
+          ‹
+        </button>
+      </div>
+      <div v-loading="conversationsLoading || conversationSwitching" class="conv-list">
+        <button
+          v-for="conv in conversations"
+          :key="conv.id"
+          type="button"
+          class="conv-item"
+          :class="{ active: conv.id === activeConversationId }"
+          @click="loadConversation(conv.id)"
+        >
+          <span class="conv-title">{{ conv.title || '新对话' }}</span>
+          <span class="conv-preview">{{ conv.preview || '暂无消息' }}</span>
+          <span class="conv-meta">
+            <span class="conv-time">{{ formatConvTime(conv.updatedAt) }}</span>
+            <span
+              class="conv-delete"
+              title="删除"
+              @click.stop="deleteConversationItem(conv.id)"
+            >×</span>
+          </span>
+        </button>
+        <p v-if="!conversations.length && !conversationsLoading" class="conv-empty">
+          暂无历史对话
+        </p>
+      </div>
+    </aside>
+
+    <div class="chat-main">
+      <button
+        v-if="!convSidebarOpen"
+        type="button"
+        class="sidebar-toggle"
+        @click="convSidebarOpen = true"
+      >
+        ☰ 对话列表
+      </button>
+
     <header class="chat-header">
       <div class="chat-header-inner">
         <div>
           <h2>AI 对话</h2>
           <p class="model-tag">Doubao-Seed-2.0-lite · 竞品分析多 Agent · Firecrawl MCP</p>
         </div>
-        <button type="button" class="btn-ghost btn-sm" @click="clearChat">
+        <button type="button" class="btn-ghost btn-sm" @click="startNewConversation">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6"/>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
-          清空
+          新建对话
         </button>
       </div>
     </header>
@@ -887,8 +1124,9 @@ onUnmounted(() => {
                 >
                   <AgentIcon :name="name" :size="18" />
                   <span class="agent-chip-label">{{ AGENT_LABELS[name] }}</span>
+                  <span class="agent-chip-metrics">{{ agentMetricsSummary(msg, name) }}</span>
                   <StatusIcon :status="taskAgentStatus(msg, name)" :size="12" />
-                  <span class="agent-chip-count">{{ agentActivityCount(msg, name) }}</span>
+                  <span class="agent-chip-count">{{ agentToolCount(msg, name) }}</span>
                 </button>
               </div>
               <div v-if="canReplayProcess(msg)" class="replay-toolbar">
@@ -917,7 +1155,7 @@ onUnmounted(() => {
                 class="process-preview-item"
               >
                 <span class="preview-index">{{ index + 1 }}</span>
-                <span class="preview-label">{{ stepTypeLabel(step) }}</span>
+                <span class="preview-label">{{ chatStepLabel(step) }}</span>
                 <span class="preview-text">{{ stepSummary(step, 80) }}</span>
               </li>
             </ul>
@@ -931,7 +1169,7 @@ onUnmounted(() => {
                 <button type="button" class="step-row-head" @click="toggleStep(step)">
                   <span class="step-dot" />
                   <span class="step-row-label">
-                    {{ stepTypeLabel(step) }}
+                    {{ chatStepLabel(step) }}
                   </span>
                   <span class="step-row-summary">{{ stepSummary(step) }}</span>
                   <span v-if="step.type === 'tool'" class="step-row-badge" :class="step.status">
@@ -939,6 +1177,9 @@ onUnmounted(() => {
                   </span>
                   <span v-else-if="step.type === 'agent'" class="step-row-badge" :class="step.agentStatus">
                     {{ agentStatusIcon(step.agentStatus ?? 'pending') }}
+                  </span>
+                  <span v-else-if="step.type === 'event'" class="step-row-badge" :class="step.eventKind">
+                    {{ step.eventKind === 'clarification' ? '?' : '↩' }}
                   </span>
                 </button>
                 <div v-show="step.expanded || (step.type === 'agent' && step.agentStatus === 'running') || (step.type === 'thinking' && (step.thinkingKind === 'thinking' || step.thinkingKind === 'path' || step.thinkingKind === 'output' || step.thinkingKind === 'analysis'))" class="step-row-detail">
@@ -954,6 +1195,26 @@ onUnmounted(() => {
                   <template v-else-if="step.type === 'agent'">
                     <pre v-if="step.content" class="step-text">{{ step.content }}</pre>
                     <p v-else-if="step.agentStatus === 'running'" class="step-pending">等待子步骤输出…</p>
+                    <p v-if="step.metricsLabel" class="agent-metrics">{{ step.metricsLabel }}</p>
+                  </template>
+                  <template v-else-if="step.type === 'event'">
+                    <div class="event-card" :class="step.eventKind">
+                      <p class="event-title">
+                        {{ step.eventKind === 'clarification' ? '等待澄清' : 'QA 打回重做' }}
+                      </p>
+                      <p v-if="step.eventKind === 'clarification' && step.question" class="event-text">
+                        {{ step.question }}
+                      </p>
+                      <p v-else class="event-text">
+                        {{ step.content }}
+                      </p>
+                      <p v-if="step.targetAgent" class="event-meta">
+                        目标 Agent：{{ AGENT_LABELS[step.targetAgent] }}
+                      </p>
+                      <p v-if="step.parentAgent" class="event-meta">
+                        来源 Agent：{{ AGENT_LABELS[step.parentAgent] }}
+                      </p>
+                    </div>
                   </template>
                   <template v-else>
                     <div v-if="step.toolArgs" class="step-block">
@@ -1016,16 +1277,173 @@ onUnmounted(() => {
       </div>
       <p class="chat-hint">CompeteAI · 竞品分析走多 Agent 流水线；普通问题走对话 + MCP 工具</p>
     </footer>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .chat-page {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
   min-height: 0;
   background: var(--bg-base);
+}
+
+.conv-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  transition: width 0.2s, margin 0.2s;
+}
+
+.conv-sidebar.collapsed {
+  width: 0;
+  overflow: hidden;
+  border: none;
+}
+
+.conv-sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.btn-new {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--el-color-primary);
+  color: #fff;
+  cursor: pointer;
+}
+
+.btn-icon {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 8px;
+}
+
+.conv-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.conv-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.conv-item:hover {
+  background: var(--bg-hover);
+}
+
+.conv-item.active {
+  background: var(--bg-hover);
+  border-color: var(--el-color-primary-light-5);
+}
+
+.conv-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.conv-preview {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.conv-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.conv-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.conv-delete {
+  font-size: 16px;
+  color: var(--text-muted);
+  opacity: 0;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.conv-item:hover .conv-delete {
+  opacity: 1;
+}
+
+.conv-delete:hover {
+  color: var(--el-color-danger);
+}
+
+.conv-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px 8px;
+}
+
+.chat-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sidebar-toggle {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .chat-header {
@@ -1310,6 +1728,12 @@ onUnmounted(() => {
   font-family: var(--font-mono);
 }
 
+.agent-chip-metrics {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
 .agent-chip-count {
   min-width: 16px;
   padding: 0 4px;
@@ -1531,6 +1955,62 @@ onUnmounted(() => {
   margin: 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.agent-metrics {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.event-card {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+
+.event-card.clarification {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.event-card.rejection {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.event-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.event-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.event-meta {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.step-row-badge.clarification {
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.step-row-badge.rejection {
+  color: var(--danger);
+  background: var(--danger-dim);
 }
 
 .bubble-text {

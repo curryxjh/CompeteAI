@@ -96,6 +96,7 @@ func TargetAgentForIssues(issues []protocol.Issue) domain.AgentName {
 		agent    domain.AgentName
 	}{
 		{protocol.IssueSourceMissing, domain.AgentCollector},
+		{protocol.IssueMissingSourceRef, domain.AgentAnalyst},
 		{protocol.IssueAnalysisIncomplete, domain.AgentAnalyst},
 		{protocol.IssuePricingMissing, domain.AgentAnalyst},
 		{protocol.IssueUnsupportedClaim, domain.AgentAnalyst},

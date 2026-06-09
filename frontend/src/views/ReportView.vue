@@ -6,6 +6,7 @@ import { useReport } from '@/composables/useReport'
 import { exportReport } from '@/api/report'
 import ReportHeader from '@/components/report/ReportHeader.vue'
 import FeatureMatrix from '@/components/report/FeatureMatrix.vue'
+import FeatureTree from '@/components/report/FeatureTree.vue'
 import SWOTRadar from '@/components/report/SWOTRadar.vue'
 import PricingCompare from '@/components/report/PricingCompare.vue'
 import UserPersonaCard from '@/components/report/UserPersonaCard.vue'
@@ -85,6 +86,15 @@ const competitors = computed(() => {
               :sources="report.sources"
               @open-source="openSource"
             />
+          </el-tab-pane>
+          <el-tab-pane label="功能树" name="featureTree">
+            <FeatureTree
+              v-if="report.featureTree"
+              :feature-tree="report.featureTree"
+              :sources="report.sources"
+              @open-source="openSource"
+            />
+            <el-empty v-else description="暂无功能树" />
           </el-tab-pane>
           <el-tab-pane label="SWOT" name="swot">
             <SWOTRadar :swot="report.swot" @open-source="openSource" />
