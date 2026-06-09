@@ -188,7 +188,7 @@ func (m *Manager) CallTool(name string, args map[string]interface{}) (*protocol.
 	if resp.Error != nil {
 		return nil, fmt.Errorf("tool %s error: %s", name, resp.Error.Message)
 	}
-
+	
 	var result protocol.CallToolResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal tool result: %w", err)
@@ -220,7 +220,6 @@ func FormatToolResult(result *protocol.CallToolResult) string {
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	for name, t := range m.servers {
 		if err := t.Close(); err != nil {
 			return fmt.Errorf("close %s: %w", name, err)

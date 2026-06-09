@@ -27,6 +27,9 @@ type AppConfig struct {
 	*RedisConfig `mapstructure:"redis"`
 	*LLMConfig          `mapstructure:"llm"`
 	*FirecrawlMCPConfig  `mapstructure:"firecrawl_mcp"`
+	*KafkaConfig         `mapstructure:"kafka"`
+	*WorkflowConfig      `mapstructure:"workflow"`
+	*MemoryConfig        `mapstructure:"memory"`
 }
 
 type LLMConfig struct {
@@ -39,6 +42,49 @@ type FirecrawlMCPConfig struct {
 	Enabled bool     `mapstructure:"enabled"`
 	Command string   `mapstructure:"command"`
 	Args    []string `mapstructure:"args"`
+}
+
+type KafkaConfig struct {
+	Enabled bool     `mapstructure:"enabled"`
+	Brokers []string `mapstructure:"brokers"`
+	GroupID string   `mapstructure:"group_id"`
+}
+
+type WorkflowConfig struct {
+	MaxAgentRetries    int  `mapstructure:"max_agent_retries"`
+	MaxRounds          int  `mapstructure:"max_rounds"`
+	UseRedisBlackboard bool `mapstructure:"use_redis_blackboard"`
+}
+
+type MemoryConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
+	ExplicitFile string `mapstructure:"explicit_file"`
+	ProjectID    string `mapstructure:"project_id"`
+	WorkspaceID  string `mapstructure:"workspace_id"`
+
+	Retrieval MemoryRetrievalConfig `mapstructure:"retrieval"`
+	WritePolicy MemoryWritePolicyConfig `mapstructure:"write_policy"`
+	Governance MemoryGovernanceConfig `mapstructure:"governance"`
+}
+
+type MemoryRetrievalConfig struct {
+	TopKFacts    int  `mapstructure:"top_k_facts"`
+	TopKEpisodes int  `mapstructure:"top_k_episodes"`
+	TopKEvidence int  `mapstructure:"top_k_evidence"`
+	Rerank       bool `mapstructure:"rerank"`
+}
+
+type MemoryWritePolicyConfig struct {
+	MinConfidence          float64 `mapstructure:"min_confidence"`
+	AllowPendingInference  bool    `mapstructure:"allow_pending_inference"`
+	RequireSourceForFact   bool    `mapstructure:"require_source_for_fact"`
+	EpisodeOnCompletionOnly bool   `mapstructure:"episode_on_completion_only"`
+}
+
+type MemoryGovernanceConfig struct {
+	DecayAfterDays   int `mapstructure:"decay_after_days"`
+	StaleAfterDays   int `mapstructure:"stale_after_days"`
+	InvalidAfterDays int `mapstructure:"invalid_after_days"`
 }
 
 type MySQLConfig struct {

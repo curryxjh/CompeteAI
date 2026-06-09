@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   streamChat,
   type ChatMessage,
   type ChatStreamEvent,
 } from '@/api/chat'
+import { getReport } from '@/api/report'
+import { createTask, subscribeTaskStream, type AgentThinkingEvent, type TaskToolStepEvent } from '@/api/task'
 import { renderMarkdown, stepTypeLabel, toolDisplayName } from '@/utils/markdown'
+import { reportToMarkdown } from '@/utils/reportMarkdown'
+import { parseAnalysisRequest } from '@/utils/analysis'
+import { AGENT_LABELS, AGENT_ORDER, agentStatusIcon } from '@/utils/agent'
+import type { AgentName, AgentRunStatus, AgentState } from '@/types'
 
-type StepType = 'thinking' | 'tool'
+type StepType = 'thinking' | 'tool' | 'agent'
 
 interface ChatStep {
   id: string
@@ -18,6 +24,11 @@ interface ChatStep {
   toolArgs?: string
   toolResult?: string
   status?: 'running' | 'done' | 'error'
+  agentName?: AgentName
+  agentStatus?: AgentRunStatus
+  parentAgent?: AgentName
+  thinkingKind?: 'path' | 'note' | 'thinking' | 'output' | 'analysis'
+  noteRunning?: boolean
   expanded?: boolean
 }
 
@@ -26,13 +37,16 @@ interface UiMessage extends ChatMessage {
   streaming?: boolean
   steps?: ChatStep[]
   stepsVisible?: boolean
+  taskMode?: boolean
+  taskId?: string
 }
 
 const messages = ref<UiMessage[]>([
   {
     id: 'welcome',
     role: 'assistant',
-    content: '你好，我是 CompeteAI 助手。有什么可以帮你的？',
+    content:
+      '你好，我是 CompeteAI 助手。你可以直接描述竞品分析任务（例如「分析 Cursor 与 GitHub Copilot 的功能、定价与 SWOT」），我会启动多 Agent 流水线并展示完整执行过程；也可以进行普通对话。',
     steps: [],
   },
 ])
@@ -41,6 +55,7 @@ const input = ref('')
 const loading = ref(false)
 const listRef = ref<HTMLElement | null>(null)
 const abortRef = ref<AbortController | null>(null)
+const taskStreamUnsub = ref<(() => void) | null>(null)
 
 function scrollToBottom() {
   nextTick(() => {
@@ -53,9 +68,222 @@ function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function initAgentSteps(): ChatStep[] {
+  return AGENT_ORDER.map((name) => ({
+    id: uid(),
+    type: 'agent' as const,
+    content: '',
+    agentName: name,
+    agentStatus: name === 'coordinator' ? 'running' : 'pending',
+  }))
+}
+
+function insertAfterAgent(assistant: UiMessage, agentName: AgentName, step: ChatStep) {
+  if (!assistant.steps) assistant.steps = []
+  const agentIdx = assistant.steps.findIndex(
+    (s) => s.type === 'agent' && s.agentName === agentName,
+  )
+  if (agentIdx < 0) {
+    assistant.steps.push(step)
+    return
+  }
+  let insertAt = agentIdx + 1
+  while (insertAt < assistant.steps.length) {
+    const cur = assistant.steps[insertAt]
+    if (cur.type === 'agent') break
+    insertAt++
+  }
+  assistant.steps.splice(insertAt, 0, step)
+}
+
+function updateAgentStep(assistant: UiMessage, data: AgentState & { message?: string }) {
+  if (!assistant.steps) return
+  const name = data.name
+  if (!name) return
+  const step = assistant.steps.find((s) => s.type === 'agent' && s.agentName === name)
+  if (!step) return
+  step.agentStatus = data.status
+  if (data.message) step.content = data.message
+  if (data.status === 'running') {
+    step.expanded = true
+  }
+  if (data.status === 'completed' || data.status === 'failed') {
+    step.expanded = false
+  }
+}
+
+function handleAgentThinking(assistant: UiMessage, ev: AgentThinkingEvent) {
+  if (!assistant.steps) assistant.steps = []
+  const agent = ev.agent as AgentName | undefined
+  if (!agent) return
+  const content = ev.content ?? ''
+  const kind = ev.kind ?? 'note'
+
+  if (kind === 'output') {
+    const last = [...assistant.steps].reverse().find(
+      (s) =>
+        s.type === 'thinking' &&
+        s.thinkingKind === 'output' &&
+        s.parentAgent === agent,
+    )
+    if (last && ev.status === 'running') {
+      last.content += content
+      last.expanded = true
+      return
+    }
+    insertAfterAgent(assistant, agent, {
+      id: uid(),
+      type: 'thinking',
+      thinkingKind: 'output',
+      content,
+      parentAgent: agent,
+      expanded: true,
+    })
+    return
+  }
+
+  if (kind === 'analysis') {
+    const existing = assistant.steps.find(
+      (s) => s.thinkingKind === 'analysis' && s.parentAgent === agent,
+    )
+    if (existing) {
+      existing.content = content
+      existing.expanded = true
+    } else {
+      insertAfterAgent(assistant, agent, {
+        id: uid(),
+        type: 'thinking',
+        thinkingKind: 'analysis',
+        content,
+        parentAgent: agent,
+        expanded: true,
+      })
+    }
+    assistant.content = [
+      '## 分析报告（Analyst 预览）',
+      '',
+      content,
+      '',
+      '---',
+      '',
+      '_Writer / QA 仍在处理，完成后将在此展示完整终稿…_',
+    ].join('\n')
+    return
+  }
+
+  if (kind === 'thinking') {
+    if (!content) return
+    const last = [...assistant.steps].reverse().find(
+      (s) =>
+        s.type === 'thinking' &&
+        s.thinkingKind === 'thinking' &&
+        s.parentAgent === agent,
+    )
+    if (last && ev.status === 'running') {
+      last.content += content
+      last.expanded = true
+      return
+    }
+    insertAfterAgent(assistant, agent, {
+      id: uid(),
+      type: 'thinking',
+      thinkingKind: 'thinking',
+      content,
+      parentAgent: agent,
+      expanded: true,
+    })
+    return
+  }
+
+  if (kind === 'note' && ev.status === 'running') {
+    const runningNote = [...assistant.steps].reverse().find(
+      (s) =>
+        s.thinkingKind === 'note' &&
+        s.parentAgent === agent &&
+        s.noteRunning,
+    )
+    if (runningNote) {
+      runningNote.content = content
+      return
+    }
+  }
+
+  if (!content) return
+
+  insertAfterAgent(assistant, agent, {
+    id: uid(),
+    type: 'thinking',
+    thinkingKind: kind === 'path' ? 'path' : 'note',
+    content,
+    parentAgent: agent,
+    expanded: kind === 'path' || kind === 'analysis',
+    noteRunning: kind === 'note' && ev.status === 'running',
+  })
+}
+
+function handleTaskToolStep(assistant: UiMessage, ev: TaskToolStepEvent) {
+  if (!assistant.steps) assistant.steps = []
+  const toolName = ev.tool_name
+  if (!toolName) return
+  const parentAgent = (ev.agent ?? 'collector') as AgentName
+
+  if (ev.status === 'running') {
+    insertAfterAgent(assistant, parentAgent, {
+      id: uid(),
+      type: 'tool',
+      content: '',
+      toolName,
+      toolArgs: ev.tool_args,
+      status: 'running',
+      parentAgent,
+      expanded: false,
+    })
+    return
+  }
+
+  const step = [...assistant.steps].reverse().find(
+    (s) =>
+      s.type === 'tool' &&
+      s.toolName === toolName &&
+      s.status === 'running' &&
+      s.parentAgent === parentAgent,
+  )
+  if (step) {
+    step.toolResult = ev.tool_result
+    step.toolArgs = ev.tool_args ?? step.toolArgs
+    step.status = ev.status === 'error' ? 'error' : 'done'
+  } else {
+    insertAfterAgent(assistant, parentAgent, {
+      id: uid(),
+      type: 'tool',
+      content: '',
+      toolName,
+      toolArgs: ev.tool_args,
+      toolResult: ev.tool_result,
+      status: ev.status === 'error' ? 'error' : 'done',
+      parentAgent,
+      expanded: false,
+    })
+  }
+}
+
 function stepSummary(step: ChatStep, max = 56): string {
   if (step.type === 'thinking') {
+    if (step.thinkingKind === 'path') return truncate(step.content, max)
+    if (step.thinkingKind === 'note') return truncate(step.content, max)
+    if (step.thinkingKind === 'analysis') return '结构化分析结果'
+    if (step.thinkingKind === 'output') {
+      return step.content ? truncate(step.content.replace(/\s+/g, ' '), max) : '生成中…'
+    }
     return step.content ? truncate(step.content, max) : '思考中…'
+  }
+  if (step.type === 'agent') {
+    if (step.content) return truncate(step.content, max)
+    if (step.agentStatus === 'running') return '执行中…'
+    if (step.agentStatus === 'completed') return '已完成'
+    if (step.agentStatus === 'failed') return '失败'
+    if (step.agentStatus === 'rejected') return '被打回'
+    return '等待中'
   }
   const arg = step.toolArgs ?? ''
   const query = arg.match(/^query:\s*(.+)/m)?.[1]
@@ -85,8 +313,39 @@ function stepCount(msg: UiMessage): number {
 function processStats(msg: UiMessage): string {
   const steps = msg.steps ?? []
   if (!steps.length) return ''
+
+  const agents = steps.filter((s) => s.type === 'agent')
   const tools = steps.filter((s) => s.type === 'tool')
   const thinking = steps.filter((s) => s.type === 'thinking').length
+
+  if (msg.taskMode && agents.length) {
+    const running = agents.find((s) => s.agentStatus === 'running')
+    const thinkingCount = steps.filter(
+      (s) => s.type === 'thinking' && s.thinkingKind === 'thinking',
+    ).length
+    if (running?.agentName) {
+      const extra = thinkingCount ? ` · 推理 ${thinkingCount} 段` : ''
+      return `${AGENT_LABELS[running.agentName]} 执行中…${extra}`
+    }
+    const toolRunning = tools.find((s) => s.status === 'running')
+    if (toolRunning) {
+      return `正在 ${toolDisplayName(toolRunning.toolName)}…`
+    }
+    const doneAgents = agents.filter((s) => s.agentStatus === 'completed').length
+    const parts: string[] = [`Agent ${doneAgents}/${agents.length}`]
+    if (tools.length) {
+      const byTool = new Map<string, number>()
+      for (const s of tools.filter((t) => t.status === 'done')) {
+        const key = stepTypeLabel(s)
+        byTool.set(key, (byTool.get(key) ?? 0) + 1)
+      }
+      for (const [name, n] of byTool) {
+        parts.push(`${name} ${n} 次`)
+      }
+    }
+    return parts.join('，')
+  }
+
   const running = tools.filter((s) => s.status === 'running').length
   if (running > 0) {
     const cur = tools.find((s) => s.status === 'running')
@@ -178,27 +437,99 @@ function handleStreamEvent(assistant: UiMessage, ev: ChatStreamEvent) {
   }
 }
 
-async function send() {
-  const text = input.value.trim()
-  if (!text || loading.value) return
+function closeTaskStream() {
+  taskStreamUnsub.value?.()
+  taskStreamUnsub.value = null
+}
 
-  input.value = ''
-  messages.value.push({ id: uid(), role: 'user', content: text })
+async function sendAnalysisTask(text: string, payload: ReturnType<typeof parseAnalysisRequest>) {
+  if (!payload) return
 
   const assistantId = uid()
   messages.value.push({
     id: assistantId,
     role: 'assistant',
-    content: '',
-    steps: [],
+    content: '正在启动多 Agent 竞品分析流水线…',
+    steps: initAgentSteps(),
     stepsVisible: true,
     streaming: true,
+    taskMode: true,
   })
   loading.value = true
   scrollToBottom()
 
+  const assistant = messages.value.find((m) => m.id === assistantId)
+  if (!assistant) return
+
+  closeTaskStream()
+
+  try {
+    const task = await createTask(payload)
+    assistant.taskId = task.id
+    assistant.content = `已创建任务 **${task.title}**，Agent 流水线执行中…`
+
+    taskStreamUnsub.value = subscribeTaskStream(task.id, {
+      onStarted(data) {
+        if (data.agentStates?.length) {
+          for (const st of data.agentStates) {
+            updateAgentStep(assistant, st)
+          }
+        }
+        scrollToBottom()
+      },
+      onAgentState(data) {
+        const name = (data.name ?? data.agent) as AgentName | undefined
+        if (!name) return
+        updateAgentStep(assistant, { ...data, name })
+        scrollToBottom()
+      },
+      onToolStep(ev) {
+        handleTaskToolStep(assistant, ev)
+        scrollToBottom()
+      },
+      onAgentThinking(ev) {
+        handleAgentThinking(assistant, ev)
+        scrollToBottom()
+      },
+      onTaskStatus(data) {
+        if (data.status === 'clarifying') {
+          assistant.content += '\n\n⚠️ Coordinator 需要澄清，请前往任务页回复。'
+        }
+        if (data.status === 'reworking') {
+          assistant.content += '\n\n↩ QA 打回，正在局部重跑…'
+        }
+      },
+      async onComplete() {
+        assistant.streaming = false
+        try {
+          const report = await getReport(task.id)
+          assistant.content = reportToMarkdown(report)
+        } catch {
+          assistant.content += '\n\n任务已完成，但加载报告失败，请前往任务页查看。'
+        }
+        loading.value = false
+        scrollToBottom()
+      },
+      onFailed(data) {
+        assistant.streaming = false
+        assistant.content = `任务失败：${data.message ?? '未知错误'}`
+        loading.value = false
+        ElMessage.error(data.message ?? '任务失败')
+        scrollToBottom()
+      },
+    })
+  } catch (e) {
+    assistant.streaming = false
+    const msg = e instanceof Error ? e.message : '创建任务失败'
+    assistant.content = `抱歉，无法启动竞品分析任务：${msg}`
+    ElMessage.error(msg)
+    loading.value = false
+  }
+}
+
+async function sendChatMessage(text: string, assistantId: string) {
   const history: ChatMessage[] = messages.value
-    .filter((m) => m.id !== 'welcome' && m.id !== assistantId)
+    .filter((m) => m.id !== 'welcome' && m.id !== assistantId && !m.taskMode)
     .map(({ role, content }) => ({ role, content }))
   history.push({ role: 'user', content: text })
 
@@ -240,8 +571,36 @@ async function send() {
   }
 }
 
+async function send() {
+  const text = input.value.trim()
+  if (!text || loading.value) return
+
+  input.value = ''
+  messages.value.push({ id: uid(), role: 'user', content: text })
+
+  const analysisPayload = parseAnalysisRequest(text)
+  if (analysisPayload) {
+    await sendAnalysisTask(text, analysisPayload)
+    return
+  }
+
+  const assistantId = uid()
+  messages.value.push({
+    id: assistantId,
+    role: 'assistant',
+    content: '',
+    steps: [],
+    stepsVisible: true,
+    streaming: true,
+  })
+  loading.value = true
+  scrollToBottom()
+  await sendChatMessage(text, assistantId)
+}
+
 function stop() {
   abortRef.value?.abort()
+  closeTaskStream()
   loading.value = false
   const last = messages.value.at(-1)
   if (last?.streaming) last.streaming = false
@@ -256,6 +615,7 @@ function onKeydown(e: KeyboardEvent) {
 
 function clearChat() {
   if (loading.value) stop()
+  closeTaskStream()
   messages.value = [
     {
       id: 'welcome',
@@ -271,6 +631,7 @@ function toggleStep(step: ChatStep) {
 }
 
 onMounted(scrollToBottom)
+onUnmounted(closeTaskStream)
 </script>
 
 <template>
@@ -279,7 +640,7 @@ onMounted(scrollToBottom)
       <div class="chat-header-inner">
         <div>
           <h2>AI 对话</h2>
-          <p class="model-tag">Doubao-Seed-2.0-lite · Firecrawl MCP</p>
+          <p class="model-tag">Doubao-Seed-2.0-lite · 竞品分析多 Agent · Firecrawl MCP</p>
         </div>
         <button type="button" class="btn-ghost btn-sm" @click="clearChat">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -358,7 +719,7 @@ onMounted(scrollToBottom)
                 v-for="step in msg.steps"
                 :key="step.id"
                 class="step-row"
-                :class="[step.type, step.status, { open: step.expanded }]"
+                :class="[step.type, step.status, step.thinkingKind, { open: step.expanded || (step.type === 'agent' && step.agentStatus === 'running') || (step.type === 'thinking' && step.thinkingKind === 'thinking' && step.expanded) }]"
               >
                 <button type="button" class="step-row-head" @click="toggleStep(step)">
                   <span class="step-dot" />
@@ -369,10 +730,23 @@ onMounted(scrollToBottom)
                   <span v-if="step.type === 'tool'" class="step-row-badge" :class="step.status">
                     {{ step.status === 'running' ? '…' : step.status === 'error' ? '!' : '✓' }}
                   </span>
+                  <span v-else-if="step.type === 'agent'" class="step-row-badge" :class="step.agentStatus">
+                    {{ agentStatusIcon(step.agentStatus ?? 'pending') }}
+                  </span>
                 </button>
-                <div v-show="step.expanded" class="step-row-detail">
+                <div v-show="step.expanded || (step.type === 'agent' && step.agentStatus === 'running') || (step.type === 'thinking' && (step.thinkingKind === 'thinking' || step.thinkingKind === 'path' || step.thinkingKind === 'output' || step.thinkingKind === 'analysis'))" class="step-row-detail">
                   <template v-if="step.type === 'thinking'">
-                    <pre class="step-text">{{ step.content }}</pre>
+                    <div
+                      v-if="step.thinkingKind === 'analysis'"
+                      class="step-md md-body"
+                      v-html="renderMarkdown(step.content)"
+                    />
+                    <pre v-else-if="step.thinkingKind === 'output'" class="step-text output">{{ step.content || '生成中…' }}</pre>
+                    <pre v-else class="step-text" :class="step.thinkingKind">{{ step.content || '思考中…' }}</pre>
+                  </template>
+                  <template v-else-if="step.type === 'agent'">
+                    <pre v-if="step.content" class="step-text">{{ step.content }}</pre>
+                    <p v-else-if="step.agentStatus === 'running'" class="step-pending">等待子步骤输出…</p>
                   </template>
                   <template v-else>
                     <div v-if="step.toolArgs" class="step-block">
@@ -433,7 +807,7 @@ onMounted(scrollToBottom)
           </button>
         </div>
       </div>
-      <p class="chat-hint">CompeteAI · 支持展示思考过程与 MCP 工具调用</p>
+      <p class="chat-hint">CompeteAI · 竞品分析走多 Agent 流水线；普通问题走对话 + MCP 工具</p>
     </footer>
   </div>
 </template>
@@ -764,6 +1138,55 @@ onMounted(scrollToBottom)
 .step-row-badge.error {
   color: var(--danger);
   background: var(--danger-dim);
+}
+
+.step-row-badge.completed {
+  color: #16a34a;
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.step-row-badge.pending {
+  color: var(--text-muted);
+  background: var(--bg-base);
+}
+
+.step-row-badge.failed,
+.step-row-badge.rejected {
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+.step-row.agent.running .step-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.step-row.thinking.path .step-dot {
+  background: #6366f1;
+}
+
+.step-text.path {
+  color: var(--accent-light);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.step-text.output {
+  max-height: 280px;
+  overflow: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.step-row.thinking.analysis .step-dot {
+  background: var(--success);
+}
+
+.step-row.thinking .step-row-detail,
+.step-row.agent.running .step-row-detail {
+  display: block;
 }
 
 .step-row-detail {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useTaskStore } from '@/stores/task'
 import Omnibar from '@/components/task/Omnibar.vue'
 import TaskCard from '@/components/task/TaskCard.vue'
@@ -11,7 +12,13 @@ const filterOpen = ref(false)
 onMounted(() => store.fetchTasks())
 
 async function onCreate(payload: CreateTaskPayload) {
-  await store.create(payload)
+  try {
+    await store.create(payload)
+    ElMessage.success('竞品分析任务已启动')
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '创建任务失败'
+    ElMessage.error(msg)
+  }
 }
 </script>
 
@@ -47,6 +54,8 @@ async function onCreate(payload: CreateTaskPayload) {
           class="filter-select"
         >
           <el-option label="进行中" value="running" />
+          <el-option label="待澄清" value="clarifying" />
+          <el-option label="重做中" value="reworking" />
           <el-option label="已完成" value="completed" />
           <el-option label="失败" value="failed" />
         </el-select>

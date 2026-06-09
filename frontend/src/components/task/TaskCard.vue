@@ -15,7 +15,12 @@ const props = withDefaults(
 const router = useRouter()
 
 const statusLabel: Record<string, string> = {
+  queued: '排队中',
   running: '运行中',
+  clarifying: '待澄清',
+  reworking: '重做中',
+  waiting_reply: '等待回复',
+  attention_required: '需人工处理',
   completed: '已完成',
   failed: '失败',
   pending: '等待中',
@@ -34,7 +39,7 @@ function viewTrace() {
 <template>
   <article
     class="task-card card-interactive"
-    :class="[task.status, { 'is-running': task.status === 'running' }]"
+    :class="[task.status, { 'is-running': ['queued','running','reworking','clarifying','waiting_reply'].includes(task.status) }]"
     :style="{ '--stagger': index }"
   >
     <div class="card-head">
@@ -46,7 +51,7 @@ function viewTrace() {
           <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
           <path d="M22 4L12 14.01l-3-3"/>
         </svg>
-        <svg v-else-if="task.status === 'failed'" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <svg v-else-if="task.status === 'failed' || task.status === 'attention_required'" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <circle cx="12" cy="12" r="10"/>
           <path d="M15 9l-6 6M9 9l6 6"/>
         </svg>
@@ -83,7 +88,7 @@ function viewTrace() {
     </div>
 
     <TaskProgressBar
-      v-if="task.status === 'running'"
+      v-if="task.status === 'running' || task.status === 'reworking' || task.status === 'clarifying'"
       :progress="task.progress"
       :agent-states="task.agentStates"
     />

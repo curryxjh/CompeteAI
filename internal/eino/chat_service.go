@@ -153,7 +153,7 @@ func (s *ChatService) generateWithEvents(
 			if err := onEvent(StreamEvent{
 				Type:     StreamEventToolCall,
 				ToolName: call.Function.Name,
-				ToolArgs: formatToolArgsForUI(call.Function.Arguments),
+				ToolArgs: FormatToolArgsForUI(call.Function.Arguments),
 				Status:   "running",
 			}); err != nil {
 				return err
@@ -163,7 +163,7 @@ func (s *ChatService) generateWithEvents(
 			if err := onEvent(StreamEvent{
 				Type:       StreamEventToolResult,
 				ToolName:   call.Function.Name,
-				ToolArgs:   formatToolArgsForUI(call.Function.Arguments),
+				ToolArgs:   FormatToolArgsForUI(call.Function.Arguments),
 				ToolResult: FormatToolResultForUI(call.Function.Name, toolResult),
 				Status:     "done",
 			}); err != nil {
@@ -209,38 +209,4 @@ func (s *ChatService) callTool(ctx context.Context, call schema.ToolCall) (*sche
 		Content:    text,
 		ToolCallID: call.ID,
 	}, text
-}
-
-func truncateForUI(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "\n...(truncated)"
-}
-
-func formatToolArgsForUI(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	var args map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
-		return raw
-	}
-
-	parts := make([]string, 0, len(args))
-	if q := asString(args["query"]); q != "" {
-		parts = append(parts, "query: "+truncateForUI(q, 120))
-	}
-	if u := asString(args["url"]); u != "" {
-		parts = append(parts, "url: "+u)
-	}
-	if lim, ok := args["limit"]; ok {
-		parts = append(parts, fmt.Sprintf("limit: %v", lim))
-	}
-	if len(parts) == 0 {
-		pretty, _ := json.MarshalIndent(args, "", "  ")
-		return truncateForUI(string(pretty), 500)
-	}
-	return strings.Join(parts, "\n")
 }

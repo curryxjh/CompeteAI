@@ -6,3 +6,5 @@ config/
 docker-compose.yaml
 Dockerfile
 .env
+task.md
+bin/

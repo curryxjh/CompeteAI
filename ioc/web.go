@@ -1,10 +1,14 @@
 package ioc
 
 import (
+	"CompeteAI/internal/metrics"
+	"CompeteAI/internal/memory"
+	"CompeteAI/internal/outbox"
 	"CompeteAI/internal/pkg/ginx/middleware/ratelimit"
 	"CompeteAI/internal/web"
 	ijwt "CompeteAI/internal/web/jwt"
 	"CompeteAI/internal/web/middleware"
+	"context"
 	"strings"
 	"time"
 
@@ -13,14 +17,38 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func InitWebServer(mdls []gin.HandlerFunc, userHdl *web.UserHandler, chatHdl *web.ChatHandler, mcpHdl *web.MCPHandler) *gin.Engine {
+func InitWebServer(
+	mdls []gin.HandlerFunc,
+	userHdl *web.UserHandler,
+	chatHdl *web.ChatHandler,
+	mcpHdl *web.MCPHandler,
+	taskHdl *web.TaskHandler,
+	opsHdl *web.OpsHandler,
+	memoryHdl *web.MemoryHandler,
+	reportHdl *web.ReportHandler,
+	traceHdl *web.TraceHandler,
+	agentHdl *web.AgentHandler,
+	outboxPub *outbox.Publisher,
+) *gin.Engine {
+	go outboxPub.Run(context.Background())
 	server := gin.Default()
 	server.Use(mdls...)
+	server.GET("/metrics", gin.WrapH(metrics.HTTPHandler()))
+	server.GET("/metrics/prometheus", gin.WrapH(metrics.PrometheusHandler()))
+	server.GET("/metrics/memory", func(c *gin.Context) {
+		c.JSON(200, memory.MetricsSnapshot())
+	})
 	userHdl.RegisterRoutes(server)
 	chatHdl.RegisterRoutes(server)
 	if mcpHdl != nil {
 		mcpHdl.RegisterRoutes(server)
 	}
+	taskHdl.RegisterRoutes(server)
+	opsHdl.RegisterRoutes(server)
+	memoryHdl.RegisterRoutes(server)
+	reportHdl.RegisterRoutes(server)
+	traceHdl.RegisterRoutes(server)
+	agentHdl.RegisterRoutes(server)
 	return server
 }
 
@@ -35,7 +63,13 @@ func InitMiddlewares(redisClient redis.Cmdable, jwtHdl ijwt.Handler) []gin.Handl
 			IgnorePaths("/api/chat/completions").
 			IgnorePaths("/api/chat/stream").
 			IgnorePaths("/api/mcp/tools").
-			IgnorePaths("/api/mcp/call").Build(),
+			IgnorePaths("/api/mcp/call").
+			IgnorePaths("/api/tasks").
+			IgnorePaths("/api/ops").
+			IgnorePaths("/api/memory").
+			IgnorePaths("/api/reports").
+			IgnorePaths("/api/traces").
+			IgnorePaths("/api/agents").Build(),
 	}
 }
 

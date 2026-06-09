@@ -3,6 +3,7 @@ package middleware
 import (
 	ijwt "CompeteAI/internal/web/jwt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -27,8 +28,9 @@ func (l *LoginJWTMiddlewareBuilder) IgnorePaths(path string) *LoginJWTMiddleware
 
 func (l *LoginJWTMiddlewareBuilder) Build() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		for _, path := range l.paths {
-			if c.Request.URL.Path == path {
+		path := c.Request.URL.Path
+		for _, ignore := range l.paths {
+			if path == ignore || strings.HasPrefix(path, ignore+"/") {
 				return
 			}
 		}

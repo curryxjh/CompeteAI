@@ -174,3 +174,38 @@ func asString(v interface{}) string {
 		return fmt.Sprintf("%v", v)
 	}
 }
+
+// FormatToolArgsForUI 将工具参数 JSON 转为前端可读摘要。
+func FormatToolArgsForUI(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return raw
+	}
+
+	parts := make([]string, 0, len(args))
+	if q := asString(args["query"]); q != "" {
+		parts = append(parts, "query: "+truncateForUI(q, 120))
+	}
+	if u := asString(args["url"]); u != "" {
+		parts = append(parts, "url: "+u)
+	}
+	if lim, ok := args["limit"]; ok {
+		parts = append(parts, fmt.Sprintf("limit: %v", lim))
+	}
+	if len(parts) == 0 {
+		pretty, _ := json.MarshalIndent(args, "", "  ")
+		return truncateForUI(string(pretty), 500)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func truncateForUI(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n...(truncated)"
+}
