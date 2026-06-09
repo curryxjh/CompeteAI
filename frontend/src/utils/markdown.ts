@@ -1,5 +1,7 @@
 import MarkdownIt from 'markdown-it'
 import multimdTable from 'markdown-it-multimd-table'
+import { AGENT_LABELS } from '@/utils/agent'
+import type { AgentName } from '@/types'
 
 const md = new MarkdownIt({
   html: false,
@@ -44,7 +46,19 @@ export function toolDisplayName(name?: string): string {
 export function stepTypeLabel(step: {
   type: string
   toolName?: string
+  agentName?: string
+  thinkingKind?: string
+  parentAgent?: string
 }): string {
-  if (step.type === 'thinking') return '推理'
+  if (step.type === 'thinking') {
+    if (step.thinkingKind === 'path') return '执行路径'
+    if (step.thinkingKind === 'note') return '说明'
+    if (step.thinkingKind === 'output') return '生成内容'
+    if (step.thinkingKind === 'analysis') return '分析结果'
+    return '推理'
+  }
+  if (step.type === 'agent' && step.agentName) {
+    return AGENT_LABELS[step.agentName as AgentName] ?? step.agentName
+  }
   return toolDisplayName(step.toolName)
 }

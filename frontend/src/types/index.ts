@@ -1,4 +1,14 @@
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type TaskStatus =
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'clarifying'
+  | 'reworking'
+  | 'waiting_reply'
+  | 'attention_required'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
 
 export type AgentName =
   | 'coordinator'

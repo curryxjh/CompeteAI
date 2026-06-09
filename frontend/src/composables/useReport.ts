@@ -15,7 +15,12 @@ export function useReport(taskId: Ref<string> | string) {
     try {
       report.value = await getReport(id)
     } catch (e) {
-      error.value = e instanceof Error ? e.message : '加载报告失败'
+      error.value =
+        e instanceof Error && e.message.includes('404')
+          ? '报告尚未生成，分析可能仍在进行中，请稍后刷新'
+          : e instanceof Error
+            ? e.message
+            : '加载报告失败'
     } finally {
       loading.value = false
     }

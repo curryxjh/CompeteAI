@@ -12,6 +12,8 @@ onMounted(async () => {
   loading.value = true
   try {
     agents.value = await listAgents()
+  } catch {
+    agents.value = []
   } finally {
     loading.value = false
   }

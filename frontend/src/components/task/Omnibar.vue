@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { ANALYSIS_DIMENSIONS } from '@/mock/data'
+import { DEFAULT_ANALYSIS_DIMENSIONS, parseCompetitors } from '@/utils/analysis'
 import type { CreateTaskPayload } from '@/types'
 
 const emit = defineEmits<{
@@ -9,25 +11,14 @@ const emit = defineEmits<{
 
 const prompt = ref('分析 Cursor 与 GitHub Copilot 的功能、定价与 SWOT')
 const expanded = ref(false)
-const dimensions = ref<string[]>(['功能对比', 'SWOT', '定价'])
+const dimensions = ref<string[]>([...DEFAULT_ANALYSIS_DIMENSIONS])
 const loading = ref(false)
-
-function parseCompetitors(text: string): string[] {
-  const m = text.match(/分析\s*(.+?)\s*(?:的|与)/)
-  if (m) {
-    return m[1].split(/[,，、\s]+/).map((s) => s.trim()).filter(Boolean)
-  }
-  return text
-    .split(/[,，、\n]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 4)
-}
 
 async function onSubmit() {
   const competitors = parseCompetitors(prompt.value)
   if (competitors.length < 2) {
     expanded.value = true
+    ElMessage.warning('请至少输入两个竞品，例如：分析 Cursor 与 GitHub Copilot')
     return
   }
   loading.value = true

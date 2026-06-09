@@ -2,6 +2,7 @@ package ioc
 
 import (
 	"context"
+	"os"
 
 	einosvc "CompeteAI/internal/eino"
 	"CompeteAI/internal/pkg/logger"
@@ -9,6 +10,10 @@ import (
 )
 
 func InitFirecrawlTools() *einosvc.ToolRegistry {
+	if os.Getenv("SKIP_FIRECRAWL") == "1" {
+		logger.L().Info("firecrawl mcp skipped (SKIP_FIRECRAWL=1)")
+		return einosvc.NewToolRegistry(nil)
+	}
 	cfg := settings.Conf.FirecrawlMCPConfig
 	if cfg == nil || !cfg.Enabled {
 		logger.L().Info("firecrawl mcp disabled")

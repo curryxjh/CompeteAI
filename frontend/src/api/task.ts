@@ -1,8 +1,77 @@
 import request from './request'
 import { mockTasks } from '@/mock/data'
-import type { CreateTaskPayload, Task } from '@/types'
+import type { AgentState, CreateTaskPayload, Task, TaskStatus } from '@/types'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'
+
+export interface TaskToolStepEvent {
+  tool_name?: string
+  tool_args?: string
+  tool_result?: string
+  status?: 'running' | 'done' | 'error'
+  agent?: string
+}
+
+export interface AgentThinkingEvent {
+  agent?: string
+  kind?: 'path' | 'note' | 'thinking' | 'output' | 'analysis'
+  content?: string
+  status?: 'running' | 'done'
+}
+
+export interface TaskStreamHandlers {
+  onStarted?: (data: { status?: TaskStatus; progress?: number; agentStates?: AgentState[] }) => void
+  onAgentState?: (data: AgentState & { progress?: number; agent?: string }) => void
+  onToolStep?: (data: TaskToolStepEvent) => void
+  onAgentThinking?: (data: AgentThinkingEvent) => void
+  onTaskStatus?: (data: { status?: TaskStatus; progress?: number }) => void
+  onComplete?: (data: { status?: TaskStatus; progress?: number }) => void
+  onFailed?: (data: { message?: string }) => void
+  onClarification?: () => void
+  onRejection?: () => void
+}
+
+export function subscribeTaskStream(
+  taskId: string,
+  handlers: TaskStreamHandlers,
+): () => void {
+  const es = new EventSource(`/api/tasks/${taskId}/stream`)
+
+  es.addEventListener('task_started', (e) => {
+    handlers.onStarted?.(JSON.parse(e.data))
+  })
+  es.addEventListener('agent_state', (e) => {
+    handlers.onAgentState?.(JSON.parse(e.data))
+  })
+  es.addEventListener('tool_step', (e) => {
+    handlers.onToolStep?.(JSON.parse(e.data))
+  })
+  es.addEventListener('agent_thinking', (e) => {
+    handlers.onAgentThinking?.(JSON.parse(e.data))
+  })
+  es.addEventListener('task_status', (e) => {
+    handlers.onTaskStatus?.(JSON.parse(e.data))
+  })
+  es.addEventListener('task_complete', (e) => {
+    handlers.onComplete?.(JSON.parse(e.data))
+    es.close()
+  })
+  es.addEventListener('task_failed', (e) => {
+    handlers.onFailed?.(JSON.parse(e.data))
+    es.close()
+  })
+  es.addEventListener('clarification', () => {
+    handlers.onClarification?.()
+  })
+  es.addEventListener('rejection', () => {
+    handlers.onRejection?.()
+  })
+  es.onerror = () => {
+    es.close()
+  }
+
+  return () => es.close()
+}
 
 export async function listTasks(): Promise<Task[]> {
   if (USE_MOCK) {

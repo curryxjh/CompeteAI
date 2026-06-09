@@ -31,8 +31,12 @@ function render() {
         label: {
           show: true,
           position: 'top',
-          formatter: (p: { value: number }) =>
-            `${AGENT_LABELS[props.nodes[p.dataIndex]?.agent ?? 'coordinator']}`,
+          formatter: (p: unknown) => {
+            const param = p as { dataIndex?: number }
+            const idx = param.dataIndex ?? 0
+            const agent = props.nodes[idx]?.agent ?? 'coordinator'
+            return `${AGENT_LABELS[agent]}`
+          },
         },
       },
     ],

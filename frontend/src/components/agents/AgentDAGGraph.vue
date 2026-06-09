@@ -30,9 +30,11 @@ function render() {
   const { nodes, links } = buildGraph()
   chart.setOption({
     tooltip: {
-      formatter: (p: { data?: { name: string; id: string } }) => {
-        const d = p.data
-        return d ? `${d.name}<br/>${AGENT_LABELS[d.id as keyof typeof AGENT_LABELS]}` : ''
+      formatter: (p: unknown) => {
+        const param = p as { data?: { name?: string; id?: string } }
+        const d = param.data
+        if (!d?.name || !d.id) return ''
+        return `${d.name}<br/>${AGENT_LABELS[d.id as keyof typeof AGENT_LABELS]}`
       },
     },
     series: [
