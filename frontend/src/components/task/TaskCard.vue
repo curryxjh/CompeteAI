@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import TaskProgressBar from './TaskProgressBar.vue'
-import { formatDate } from '@/utils/agent'
+import { AGENT_LABELS, formatDate } from '@/utils/agent'
 import type { Task } from '@/types'
 
 const props = withDefaults(
@@ -92,6 +92,19 @@ function viewTrace() {
       :progress="task.progress"
       :agent-states="task.agentStates"
     />
+
+    <div
+      v-if="task.latestToolActivity && ['running', 'reworking', 'clarifying', 'waiting_reply'].includes(task.status)"
+      class="tool-activity"
+      :class="task.latestToolActivity.status"
+    >
+      <span class="tool-activity-label">
+        {{ task.latestToolActivity.agent ? AGENT_LABELS[task.latestToolActivity.agent] : 'Agent' }}
+      </span>
+      <span class="tool-activity-text">
+        {{ task.latestToolActivity.summary ?? task.latestToolActivity.toolName }}
+      </span>
+    </div>
 
     <footer class="meta">
       <span>{{ formatDate(task.createdAt) }}</span>
@@ -274,6 +287,43 @@ h3 {
   position: relative;
   z-index: 1;
   font-family: var(--font-mono);
+}
+
+.tool-activity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.tool-activity.running {
+  border-color: rgba(245, 158, 11, 0.22);
+  color: #a16207;
+}
+
+.tool-activity.error {
+  border-color: rgba(239, 68, 68, 0.22);
+  color: var(--danger);
+}
+
+.tool-activity-label {
+  flex-shrink: 0;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tool-activity-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .meta-sep {

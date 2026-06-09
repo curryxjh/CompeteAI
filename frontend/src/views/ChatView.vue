@@ -13,8 +13,11 @@ import { reportToMarkdown } from '@/utils/reportMarkdown'
 import { parseAnalysisRequest } from '@/utils/analysis'
 import { AGENT_LABELS, AGENT_ORDER, agentStatusIcon } from '@/utils/agent'
 import type { AgentName, AgentRunStatus, AgentState } from '@/types'
+import AgentIcon from '@/components/ui/AgentIcon.vue'
+import StatusIcon from '@/components/ui/StatusIcon.vue'
 
 type StepType = 'thinking' | 'tool' | 'agent'
+type StepFilter = 'all' | AgentName
 
 interface ChatStep {
   id: string
@@ -39,6 +42,11 @@ interface UiMessage extends ChatMessage {
   stepsVisible?: boolean
   taskMode?: boolean
   taskId?: string
+  stepFilter?: StepFilter
+  replayActive?: boolean
+  replayPlaying?: boolean
+  replayVisibleCount?: number
+  replaySpeed?: number
 }
 
 const messages = ref<UiMessage[]>([
@@ -56,6 +64,7 @@ const loading = ref(false)
 const listRef = ref<HTMLElement | null>(null)
 const abortRef = ref<AbortController | null>(null)
 const taskStreamUnsub = ref<(() => void) | null>(null)
+const replayTimers = new Map<string, number>()
 
 function scrollToBottom() {
   nextTick(() => {
@@ -76,6 +85,128 @@ function initAgentSteps(): ChatStep[] {
     agentName: name,
     agentStatus: name === 'coordinator' ? 'running' : 'pending',
   }))
+}
+
+function taskAgentStatus(msg: UiMessage, agentName: AgentName): AgentRunStatus {
+  const step = msg.steps?.find((item) => item.type === 'agent' && item.agentName === agentName)
+  return step?.agentStatus ?? 'pending'
+}
+
+function agentActivityCount(msg: UiMessage, agentName: AgentName): number {
+  return (
+    msg.steps?.filter(
+      (step) => step.parentAgent === agentName && (step.type === 'tool' || step.type === 'thinking'),
+    ).length ?? 0
+  )
+}
+
+function filteredSteps(msg: UiMessage): ChatStep[] {
+  const steps = msg.steps ?? []
+  const filter = msg.stepFilter ?? 'all'
+  if (filter === 'all') return steps
+  return steps.filter((step) => {
+    if (step.type === 'agent') return step.agentName === filter
+    return step.parentAgent === filter
+  })
+}
+
+function visibleSteps(msg: UiMessage): ChatStep[] {
+  const scoped = filteredSteps(msg)
+  if (!msg.replayActive) return scoped
+  const visibleCount = msg.replayVisibleCount ?? scoped.length
+  return scoped.slice(0, visibleCount)
+}
+
+function displayedStepCount(msg: UiMessage): number {
+  return visibleSteps(msg).length
+}
+
+function hasStepFilter(msg: UiMessage): boolean {
+  return (msg.stepFilter ?? 'all') !== 'all'
+}
+
+function setStepFilter(msg: UiMessage, filter: StepFilter) {
+  msg.stepFilter = filter
+  if (msg.replayActive) {
+    const limit = filteredSteps(msg).length
+    msg.replayVisibleCount = Math.min(msg.replayVisibleCount ?? limit, limit)
+  }
+}
+
+function canReplayProcess(msg: UiMessage): boolean {
+  return !!msg.taskMode && !msg.streaming && (filteredSteps(msg).length > 1)
+}
+
+function stopProcessReplay(msg: UiMessage) {
+  const timer = replayTimers.get(msg.id)
+  if (timer !== undefined) {
+    window.clearInterval(timer)
+    replayTimers.delete(msg.id)
+  }
+  msg.replayPlaying = false
+}
+
+function scheduleProcessReplay(msg: UiMessage) {
+  stopProcessReplay(msg)
+  const total = filteredSteps(msg).length
+  if (!total) return
+  msg.replayPlaying = true
+  msg.replayActive = true
+  const delay = Math.max(240, Math.floor(1200 / (msg.replaySpeed ?? 1)))
+  const timer = window.setInterval(() => {
+    const currentTotal = filteredSteps(msg).length
+    const next = (msg.replayVisibleCount ?? 0) + 1
+    if (!currentTotal || next > currentTotal) {
+      stopProcessReplay(msg)
+      return
+    }
+    msg.replayVisibleCount = next
+    scrollToBottom()
+    if (next >= currentTotal) {
+      stopProcessReplay(msg)
+    }
+  }, delay)
+  replayTimers.set(msg.id, timer)
+}
+
+function toggleProcessReplay(msg: UiMessage) {
+  if (!canReplayProcess(msg)) return
+  if (msg.replayPlaying) {
+    stopProcessReplay(msg)
+    return
+  }
+  const total = filteredSteps(msg).length
+  if ((msg.replayVisibleCount ?? total) >= total) {
+    msg.replayVisibleCount = 0
+  }
+  scheduleProcessReplay(msg)
+}
+
+function stepProcessReplay(msg: UiMessage) {
+  if (!canReplayProcess(msg)) return
+  stopProcessReplay(msg)
+  msg.replayActive = true
+  const total = filteredSteps(msg).length
+  msg.replayVisibleCount = Math.min((msg.replayVisibleCount ?? 0) + 1, total)
+}
+
+function resetProcessReplay(msg: UiMessage) {
+  stopProcessReplay(msg)
+  msg.replayActive = true
+  msg.replayVisibleCount = 0
+}
+
+function showFullProcess(msg: UiMessage) {
+  stopProcessReplay(msg)
+  msg.replayActive = false
+  msg.replayVisibleCount = filteredSteps(msg).length
+}
+
+function updateReplaySpeed(msg: UiMessage, value: number) {
+  msg.replaySpeed = value
+  if (msg.replayPlaying) {
+    scheduleProcessReplay(msg)
+  }
 }
 
 function insertAfterAgent(assistant: UiMessage, agentName: AgentName, step: ChatStep) {
@@ -216,7 +347,7 @@ function handleAgentThinking(assistant: UiMessage, ev: AgentThinkingEvent) {
     thinkingKind: kind === 'path' ? 'path' : 'note',
     content,
     parentAgent: agent,
-    expanded: kind === 'path' || kind === 'analysis',
+    expanded: kind === 'path',
     noteRunning: kind === 'note' && ev.status === 'running',
   })
 }
@@ -307,11 +438,11 @@ function stepSummary(step: ChatStep, max = 56): string {
 }
 
 function stepCount(msg: UiMessage): number {
-  return msg.steps?.length ?? 0
+  return displayedStepCount(msg)
 }
 
 function processStats(msg: UiMessage): string {
-  const steps = msg.steps ?? []
+  const steps = visibleSteps(msg)
   if (!steps.length) return ''
 
   const agents = steps.filter((s) => s.type === 'agent')
@@ -333,6 +464,12 @@ function processStats(msg: UiMessage): string {
     }
     const doneAgents = agents.filter((s) => s.agentStatus === 'completed').length
     const parts: string[] = [`Agent ${doneAgents}/${agents.length}`]
+    if (hasStepFilter(msg)) {
+      parts.push(`聚焦 ${AGENT_LABELS[(msg.stepFilter ?? 'all') as AgentName]}`)
+    }
+    if (msg.replayActive) {
+      parts.push(`回放 ${displayedStepCount(msg)}/${filteredSteps(msg).length}`)
+    }
     if (tools.length) {
       const byTool = new Map<string, number>()
       for (const s of tools.filter((t) => t.status === 'done')) {
@@ -354,6 +491,7 @@ function processStats(msg: UiMessage): string {
   }
   const parts: string[] = []
   if (thinking) parts.push(`推理 ${thinking} 次`)
+  if (msg.replayActive) parts.push(`回放 ${displayedStepCount(msg)}/${filteredSteps(msg).length}`)
   const byTool = new Map<string, number>()
   for (const s of tools) {
     const key = stepTypeLabel(s)
@@ -442,7 +580,13 @@ function closeTaskStream() {
   taskStreamUnsub.value = null
 }
 
-async function sendAnalysisTask(text: string, payload: ReturnType<typeof parseAnalysisRequest>) {
+function clearAllReplays() {
+  for (const msg of messages.value) {
+    stopProcessReplay(msg)
+  }
+}
+
+async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>) {
   if (!payload) return
 
   const assistantId = uid()
@@ -454,6 +598,8 @@ async function sendAnalysisTask(text: string, payload: ReturnType<typeof parseAn
     stepsVisible: true,
     streaming: true,
     taskMode: true,
+    stepFilter: 'all',
+    replaySpeed: 1,
   })
   loading.value = true
   scrollToBottom()
@@ -501,6 +647,8 @@ async function sendAnalysisTask(text: string, payload: ReturnType<typeof parseAn
       },
       async onComplete() {
         assistant.streaming = false
+        assistant.replayActive = false
+        assistant.replayVisibleCount = assistant.steps?.length ?? 0
         try {
           const report = await getReport(task.id)
           assistant.content = reportToMarkdown(report)
@@ -512,6 +660,8 @@ async function sendAnalysisTask(text: string, payload: ReturnType<typeof parseAn
       },
       onFailed(data) {
         assistant.streaming = false
+        assistant.replayActive = false
+        assistant.replayVisibleCount = assistant.steps?.length ?? 0
         assistant.content = `任务失败：${data.message ?? '未知错误'}`
         loading.value = false
         ElMessage.error(data.message ?? '任务失败')
@@ -520,6 +670,8 @@ async function sendAnalysisTask(text: string, payload: ReturnType<typeof parseAn
     })
   } catch (e) {
     assistant.streaming = false
+    assistant.replayActive = false
+    assistant.replayVisibleCount = assistant.steps?.length ?? 0
     const msg = e instanceof Error ? e.message : '创建任务失败'
     assistant.content = `抱歉，无法启动竞品分析任务：${msg}`
     ElMessage.error(msg)
@@ -566,6 +718,8 @@ async function sendChatMessage(text: string, assistantId: string) {
   } finally {
     assistant.streaming = false
     assistant.stepsVisible = false
+    assistant.replayActive = false
+    assistant.replayVisibleCount = assistant.steps?.length ?? 0
     loading.value = false
     scrollToBottom()
   }
@@ -580,7 +734,7 @@ async function send() {
 
   const analysisPayload = parseAnalysisRequest(text)
   if (analysisPayload) {
-    await sendAnalysisTask(text, analysisPayload)
+    await sendAnalysisTask(analysisPayload)
     return
   }
 
@@ -592,6 +746,8 @@ async function send() {
     steps: [],
     stepsVisible: true,
     streaming: true,
+    stepFilter: 'all',
+    replaySpeed: 1,
   })
   loading.value = true
   scrollToBottom()
@@ -601,6 +757,7 @@ async function send() {
 function stop() {
   abortRef.value?.abort()
   closeTaskStream()
+  clearAllReplays()
   loading.value = false
   const last = messages.value.at(-1)
   if (last?.streaming) last.streaming = false
@@ -616,6 +773,7 @@ function onKeydown(e: KeyboardEvent) {
 function clearChat() {
   if (loading.value) stop()
   closeTaskStream()
+  clearAllReplays()
   messages.value = [
     {
       id: 'welcome',
@@ -631,7 +789,10 @@ function toggleStep(step: ChatStep) {
 }
 
 onMounted(scrollToBottom)
-onUnmounted(closeTaskStream)
+onUnmounted(() => {
+  closeTaskStream()
+  clearAllReplays()
+})
 </script>
 
 <template>
@@ -698,14 +859,60 @@ onUnmounted(closeTaskStream)
               <span class="process-icon">{{ msg.streaming ? '⏳' : '⚙️' }}</span>
               <span class="process-title">
                 {{ msg.streaming ? '执行中' : '执行过程' }}
-                <span class="process-count">{{ stepCount(msg) }} 步</span>
+                <span class="process-count">
+                  {{ stepCount(msg) }} / {{ filteredSteps(msg).length }} 步
+                </span>
               </span>
               <span class="process-stats">{{ processStats(msg) }}</span>
               <span class="process-toggle">{{ msg.stepsVisible ? '收起详情' : '展开详情' }}</span>
             </button>
+            <div v-if="msg.taskMode" class="process-toolbar">
+              <div class="agent-rail">
+                <button
+                  type="button"
+                  class="agent-chip"
+                  :class="{ active: !hasStepFilter(msg) }"
+                  @click.stop="setStepFilter(msg, 'all')"
+                >
+                  <span class="agent-chip-label">全部</span>
+                  <span class="agent-chip-count">{{ msg.steps?.length ?? 0 }}</span>
+                </button>
+                <button
+                  v-for="name in AGENT_ORDER"
+                  :key="name"
+                  type="button"
+                  class="agent-chip"
+                  :class="[taskAgentStatus(msg, name), { active: msg.stepFilter === name }]"
+                  @click.stop="setStepFilter(msg, name)"
+                >
+                  <AgentIcon :name="name" :size="18" />
+                  <span class="agent-chip-label">{{ AGENT_LABELS[name] }}</span>
+                  <StatusIcon :status="taskAgentStatus(msg, name)" :size="12" />
+                  <span class="agent-chip-count">{{ agentActivityCount(msg, name) }}</span>
+                </button>
+              </div>
+              <div v-if="canReplayProcess(msg)" class="replay-toolbar">
+                <button type="button" class="btn-ghost btn-xs" @click.stop="toggleProcessReplay(msg)">
+                  {{ msg.replayPlaying ? 'pause' : 'replay' }}
+                </button>
+                <button type="button" class="btn-ghost btn-xs" @click.stop="stepProcessReplay(msg)">step</button>
+                <button type="button" class="btn-ghost btn-xs" @click.stop="resetProcessReplay(msg)">reset</button>
+                <button type="button" class="btn-ghost btn-xs" @click.stop="showFullProcess(msg)">all</button>
+                <el-radio-group
+                  class="replay-speed"
+                  :model-value="msg.replaySpeed ?? 1"
+                  size="small"
+                  @update:model-value="(value: string | number) => updateReplaySpeed(msg, Number(value))"
+                >
+                  <el-radio-button :value="1">1x</el-radio-button>
+                  <el-radio-button :value="2">2x</el-radio-button>
+                  <el-radio-button :value="4">4x</el-radio-button>
+                </el-radio-group>
+              </div>
+            </div>
             <ul v-if="!msg.stepsVisible" class="process-preview">
               <li
-                v-for="(step, index) in msg.steps"
+                v-for="(step, index) in visibleSteps(msg)"
                 :key="step.id"
                 class="process-preview-item"
               >
@@ -716,7 +923,7 @@ onUnmounted(closeTaskStream)
             </ul>
             <div v-show="msg.stepsVisible" class="process-body">
               <div
-                v-for="step in msg.steps"
+                v-for="step in visibleSteps(msg)"
                 :key="step.id"
                 class="step-row"
                 :class="[step.type, step.status, step.thinkingKind, { open: step.expanded || (step.type === 'agent' && step.agentStatus === 'running') || (step.type === 'thinking' && step.thinkingKind === 'thinking' && step.expanded) }]"
@@ -942,6 +1149,7 @@ onUnmounted(closeTaskStream)
   display: flex;
   flex-direction: column;
   gap: 6px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .process-preview-item {
@@ -1039,6 +1247,93 @@ onUnmounted(closeTaskStream)
   flex-shrink: 0;
   font-size: 11px;
   color: var(--accent-light);
+}
+
+.process-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.agent-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.agent-chip:hover {
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.agent-chip.active {
+  border-color: rgba(99, 102, 241, 0.28);
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--accent-light);
+}
+
+.agent-chip.running {
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.agent-chip.completed {
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.agent-chip.failed,
+.agent-chip.rejected {
+  border-color: rgba(239, 68, 68, 0.22);
+}
+
+.agent-chip-label {
+  font-family: var(--font-mono);
+}
+
+.agent-chip-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg-base);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 10px;
+}
+
+.replay-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn-xs {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.replay-speed {
+  --el-border-radius-base: 8px;
 }
 
 .process-body {
