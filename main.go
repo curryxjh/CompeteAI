@@ -61,6 +61,9 @@ func main() {
 	case "all":
 		log.Printf("[all-in-one] starting API + Worker with config: %s", configFile)
 		err = app.RunAll(configFile)
+	case "worker":
+		log.Printf("[worker] starting Worker with config: %s", configFile)
+		err = app.RunWorker(configFile)
 	default: // "server", "api", 其他
 		err = app.RunAPI(configFile)
 	}

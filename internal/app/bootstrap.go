@@ -99,9 +99,13 @@ func BuildSharedDeps(consumerID string) (*SharedDeps, error) {
 	}, nil
 }
 
-// RunWorker 按 WORKER_ROLE 启动消费者。
-func RunWorker() error {
-	if err := LoadConfig(); err != nil {
+// RunWorker 按 WORKER_ROLE 启动消费者。configFile 为空时使用默认路径。
+func RunWorker(configFile ...string) error {
+	cf := ""
+	if len(configFile) > 0 {
+		cf = configFile[0]
+	}
+	if err := LoadConfigFile(cf); err != nil {
 		return err
 	}
 	deps, err := BuildSharedDeps(WorkerID())
@@ -176,8 +180,12 @@ func RunAll(configFile string) error {
 }
 
 // RunRecovery 定时扫描 stale 任务并 reclaim pending 消息。
-func RunRecovery() error {
-	if err := LoadConfig(); err != nil {
+func RunRecovery(configFile ...string) error {
+	cf := ""
+	if len(configFile) > 0 {
+		cf = configFile[0]
+	}
+	if err := LoadConfigFile(cf); err != nil {
 		return err
 	}
 	deps, err := BuildSharedDeps("recovery-" + WorkerID())
