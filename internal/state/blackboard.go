@@ -7,6 +7,72 @@ import (
 	"sync"
 )
 
+// BlackboardRegistry 全局 MemoryBlackboard 单例注册表。
+// 保证同一 taskID 的所有调用方共享同一 MemoryBlackboard 实例，
+// 避免非 Redis 模式下每次 NewBlackboard() 创建空实例导致状态丢失。
+type BlackboardRegistry struct {
+	mu      sync.RWMutex
+	boards  map[string]*MemoryBlackboard
+	order   []string // 按插入顺序，用于 LRU 淘汰
+	maxSize int
+}
+
+var globalRegistry = &BlackboardRegistry{
+	boards:  make(map[string]*MemoryBlackboard),
+	maxSize: 1000,
+}
+
+// GlobalRegistry 返回全局单例注册表。
+func GlobalRegistry() *BlackboardRegistry { return globalRegistry }
+
+// SetMaxSize 允许在初始化时调整最大 task 容量（测试用）。
+func (r *BlackboardRegistry) SetMaxSize(n int) {
+	r.mu.Lock()
+	r.maxSize = n
+	r.mu.Unlock()
+}
+
+// GetOrCreate 返回 taskID 对应的 MemoryBlackboard，不存在则创建。
+func (r *BlackboardRegistry) GetOrCreate(taskID string) *MemoryBlackboard {
+	// fast path
+	r.mu.RLock()
+	if bb, ok := r.boards[taskID]; ok {
+		r.mu.RUnlock()
+		return bb
+	}
+	r.mu.RUnlock()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// double-check
+	if bb, ok := r.boards[taskID]; ok {
+		return bb
+	}
+	// LRU 淘汰：超出 maxSize 时移除最旧的条目
+	if len(r.boards) >= r.maxSize && r.maxSize > 0 {
+		oldest := r.order[0]
+		r.order = r.order[1:]
+		delete(r.boards, oldest)
+	}
+	bb := NewMemoryBlackboard()
+	r.boards[taskID] = bb
+	r.order = append(r.order, taskID)
+	return bb
+}
+
+// Release 任务完成/失败/取消时清理，释放内存。
+func (r *BlackboardRegistry) Release(taskID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.boards, taskID)
+	for i, id := range r.order {
+		if id == taskID {
+			r.order = append(r.order[:i], r.order[i+1:]...)
+			break
+		}
+	}
+}
+
 // Blackboard 共享上下文接口（§8）。
 type Blackboard interface {
 	Put(ctx context.Context, key string, value any) error

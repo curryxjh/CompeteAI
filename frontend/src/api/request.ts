@@ -3,6 +3,13 @@ import { ElMessage } from 'element-plus'
 import { getAccessToken, saveAccessToken } from '@/utils/token'
 import { refreshAccessToken } from '@/api/auth'
 
+// 在请求配置上可以携带 _skipError: true，跳过自动 ElMessage.error 弹错
+declare module 'axios' {
+  interface InternalAxiosRequestConfig {
+    _skipError?: boolean
+  }
+}
+
 const request = axios.create({
   baseURL: '/api',
   timeout: 30000,
@@ -45,9 +52,11 @@ request.interceptors.response.use(
       }
     }
 
-    const msg =
-      error.response?.data?.message ?? error.message ?? '请求失败'
-    ElMessage.error(msg)
+    if (!config?._skipError) {
+      const msg =
+        error.response?.data?.message ?? error.message ?? '请求失败'
+      ElMessage.error(msg)
+    }
     return Promise.reject(error)
   },
 )

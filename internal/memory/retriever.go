@@ -12,7 +12,9 @@ type mysqlRetriever struct {
 	ranker   *Ranker
 }
 
-func NewMySQLRetriever(d *dao.MemoryDao, emb Embedder) Retriever {
+// NewMySQLRetriever 返回 *mysqlRetriever（具体类型），
+// 供 HybridRetriever 直接访问 dao/ranker 字段；同时实现 Retriever 接口。
+func NewMySQLRetriever(d *dao.MemoryDao, emb Embedder) *mysqlRetriever {
 	return &mysqlRetriever{dao: d, embedder: emb, ranker: NewRanker()}
 }
 
@@ -32,19 +34,24 @@ func (r *mysqlRetriever) RetrieveFacts(ctx context.Context, req RetrievalRequest
 			qVec = vecs[0]
 		}
 	}
+
+	// 批量获取所有候选 fact 的 embedding（修复：替换嵌套 O(N×500) 扫描）
+	factIDs := make([]string, len(rows))
+	for i, row := range rows {
+		factIDs[i] = row.ID
+	}
+	var embMap map[string][]float32
+	if qVec != nil {
+		embMap, _ = r.dao.GetEmbeddingsByObjectIDs(ctx, "fact", factIDs)
+	}
+
 	var hits []FactHit
 	for _, row := range rows {
 		f := factFromEntity(row)
 		semantic := KeywordScore(req.Query, f.Summary+" "+f.ObjectText)
 		if qVec != nil {
-			embRows, _ := r.dao.ListAllEmbeddings(ctx, "fact", 500)
-			for _, er := range embRows {
-				if er.ObjectID == f.ID {
-					var vec []float32
-					_ = json.Unmarshal([]byte(er.EmbeddingJSON), &vec)
-					semantic = CosineSimilarity(qVec, vec)
-					break
-				}
+			if vec, ok := embMap[f.ID]; ok && len(vec) > 0 {
+				semantic = CosineSimilarity(qVec, vec)
 			}
 		}
 		entityScore := 0.0
