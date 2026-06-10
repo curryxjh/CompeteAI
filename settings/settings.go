@@ -7,6 +7,7 @@ import (
 
 	"CompeteAI/internal/pkg/logger"
 	"github.com/fsnotify/fsnotify"
+	"github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -131,8 +132,19 @@ type MySQLConfig struct {
 }
 
 func (c *MySQLConfig) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-		c.User, c.Password, c.Host, c.Port, c.DB)
+	cfg := mysql.Config{
+		User:   c.User,
+		Passwd: c.Password,
+		Net:    "tcp",
+		Addr:   fmt.Sprintf("%s:%d", c.Host, c.Port),
+		DBName: c.DB,
+		Params: map[string]string{
+			"charset":   "utf8mb4",
+			"parseTime": "True",
+			"loc":       "Local",
+		},
+	}
+	return cfg.FormatDSN()
 }
 
 type RedisConfig struct {
