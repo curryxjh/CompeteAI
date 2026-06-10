@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   streamChat,
@@ -12,6 +14,7 @@ import {
   useChatConversations,
   welcomeMessage,
 } from '@/composables/useChatConversations'
+import { usePaneResize } from '@/composables/usePaneResize'
 import { getReport } from '@/api/report'
 import {
   createTask,
@@ -23,7 +26,13 @@ import {
 } from '@/api/task'
 import { renderMarkdown, stepTypeLabel, toolDisplayName } from '@/utils/markdown'
 import { reportToMarkdown } from '@/utils/reportMarkdown'
-import { parseAnalysisRequest } from '@/utils/analysis'
+import {
+  ANALYSIS_DIMENSIONS,
+  buildAnalysisPayload,
+  DEFAULT_ANALYSIS_DIMENSIONS,
+  parseCompetitorList,
+} from '@/utils/analysis'
+import type { CreateTaskPayload } from '@/types'
 import { AGENT_LABELS, AGENT_ORDER, agentStatusIcon, formatDuration } from '@/utils/agent'
 import type { AgentName, AgentRunStatus, AgentState } from '@/types'
 import AgentIcon from '@/components/ui/AgentIcon.vue'
@@ -82,7 +91,41 @@ const {
   remove: removeConversation,
 } = useChatConversations()
 
-const convSidebarOpen = ref(true)
+const router = useRouter()
+const auth = useAuthStore()
+const useMock = import.meta.env.VITE_USE_MOCK !== 'false'
+
+type ChatMode = 'chat' | 'analysis'
+
+const chatMode = ref<ChatMode>('chat')
+const analysisCompetitors = ref('')
+const analysisDimensions = ref<string[]>([...DEFAULT_ANALYSIS_DIMENSIONS])
+
+const parsedCompetitors = computed(() => parseCompetitorList(analysisCompetitors.value))
+
+const canSendAnalysis = computed(
+  () => parsedCompetitors.value.length >= 2 && analysisDimensions.value.length > 0,
+)
+
+const FOOTER_ANALYSIS_MIN = 228
+
+const sidebarPane = usePaneResize({
+  storageKey: 'competeai_chat_sidebar_w',
+  defaultSize: 220,
+  min: 180,
+  max: 360,
+  collapseKey: 'competeai_chat_sidebar_collapsed',
+  collapsedSize: 64,
+})
+
+const footerPane = usePaneResize({
+  storageKey: 'competeai_chat_footer_h',
+  defaultSize: 148,
+  min: 112,
+  max: () => Math.min(480, Math.floor(window.innerHeight * 0.55)),
+  collapseKey: 'competeai_chat_footer_collapsed',
+  collapsedSize: 88,
+})
 
 const input = ref('')
 const loading = ref(false)
@@ -153,6 +196,18 @@ async function deleteConversationItem(id: string) {
   }
   ElMessage.success('对话已删除')
 }
+
+function go(path: string) {
+  router.push(path)
+}
+
+watch(chatMode, (mode) => {
+  if (footerPane.collapsed.value) return
+  if (mode === 'analysis' && footerPane.size.value < FOOTER_ANALYSIS_MIN) {
+    footerPane.size.value = FOOTER_ANALYSIS_MIN
+    footerPane.persistSize()
+  }
+})
 
 function formatConvTime(iso: string) {
   const d = new Date(iso)
@@ -762,7 +817,7 @@ function clearAllReplays() {
   }
 }
 
-async function sendAnalysisTask(payload: ReturnType<typeof parseAnalysisRequest>, userMsg: UiMessage) {
+async function sendAnalysisTask(payload: CreateTaskPayload, userMsg: UiMessage) {
   if (!payload) return
 
   const assistantId = uid()
@@ -917,19 +972,65 @@ async function sendChatMessage(text: string, assistantId: string, userMsg: UiMes
   }
 }
 
+function setChatMode(mode: ChatMode) {
+  if (loading.value || chatMode.value === mode) return
+  chatMode.value = mode
+}
+
+function toggleAnalysisDimension(dim: string) {
+  const idx = analysisDimensions.value.indexOf(dim)
+  if (idx >= 0) {
+    if (analysisDimensions.value.length <= 1) {
+      ElMessage.warning('请至少保留一个分析维度')
+      return
+    }
+    analysisDimensions.value = analysisDimensions.value.filter((d) => d !== dim)
+    return
+  }
+  analysisDimensions.value = [...analysisDimensions.value, dim]
+}
+
+function formatAnalysisUserMessage(payload: CreateTaskPayload, note: string) {
+  const lines = [
+    `【竞品分析】${payload.competitors.join('、')}`,
+    `维度：${payload.dimensions.join('、')}`,
+  ]
+  if (note) lines.push(note)
+  return lines.join('\n')
+}
+
 async function send() {
+  if (loading.value) return
+
+  if (chatMode.value === 'analysis') {
+    const note = input.value.trim()
+    const payload = buildAnalysisPayload(
+      analysisCompetitors.value,
+      analysisDimensions.value,
+      note || undefined,
+    )
+    if (!payload) {
+      ElMessage.warning('请至少输入 2 个竞品名称（逗号、顿号或换行分隔）')
+      return
+    }
+
+    input.value = ''
+    const userMsg: UiMessage = {
+      id: uid(),
+      role: 'user',
+      content: formatAnalysisUserMessage(payload, note),
+    }
+    messages.value.push(userMsg)
+    await sendAnalysisTask(payload, userMsg)
+    return
+  }
+
   const text = input.value.trim()
-  if (!text || loading.value) return
+  if (!text) return
 
   input.value = ''
   const userMsg: UiMessage = { id: uid(), role: 'user', content: text }
   messages.value.push(userMsg)
-
-  const analysisPayload = parseAnalysisRequest(text)
-  if (analysisPayload) {
-    await sendAnalysisTask(analysisPayload, userMsg)
-    return
-  }
 
   const assistantId = uid()
   messages.value.push({
@@ -985,20 +1086,108 @@ onUnmounted(() => {
 
 <template>
   <div class="chat-page">
-    <aside class="conv-sidebar" :class="{ collapsed: !convSidebarOpen }">
+    <aside
+      class="unified-sidebar"
+      :class="{ 'unified-sidebar--collapsed': sidebarPane.collapsed.value }"
+      :style="{ width: `${sidebarPane.effectiveSize.value}px` }"
+    >
+      <div class="sidebar-head">
+        <div class="sidebar-brand" @click="go('/')">
+          <div class="sidebar-brand-mark">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+              <path d="M2 17l10 5 10-5"/>
+              <path d="M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+          <div v-show="!sidebarPane.collapsed.value" class="sidebar-brand-text">
+            <div class="sidebar-brand-name">CompeteAI</div>
+            <div class="sidebar-brand-sub">agent workspace</div>
+          </div>
+          <button
+            v-show="!sidebarPane.collapsed.value"
+            type="button"
+            class="pane-collapse-btn sidebar-collapse"
+            title="收起侧边栏"
+            @click.stop="sidebarPane.toggleCollapse()"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </button>
+        </div>
+        <button
+          v-if="sidebarPane.collapsed.value"
+          type="button"
+          class="rail-btn rail-btn--ghost"
+          title="展开侧边栏"
+          @click="sidebarPane.toggleCollapse()"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </button>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button type="button" class="sidebar-nav-item" title="任务管理" @click="go('/')">
+          <svg class="sidebar-nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+            <rect x="9" y="3" width="6" height="4" rx="1"/>
+            <path d="M9 12h6M9 16h4"/>
+          </svg>
+          <span v-show="!sidebarPane.collapsed.value" class="sidebar-nav-label">任务管理</span>
+        </button>
+        <button type="button" class="sidebar-nav-item" title="Agent 能力" @click="go('/agents')">
+          <svg class="sidebar-nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.4V12h1a7 7 0 0 1 7 7v1H3v-1a7 7 0 0 1 7-7h1V9.4A4 4 0 0 1 12 2z"/>
+            <path d="M9 20v1a3 3 0 0 0 6 0v-1"/>
+          </svg>
+          <span v-show="!sidebarPane.collapsed.value" class="sidebar-nav-label">Agent 能力</span>
+        </button>
+        <button type="button" class="sidebar-nav-item active" title="AI 对话">
+          <svg class="sidebar-nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3c-4 0-7 2.5-7 6 0 2.2 1.2 4.1 3 5.2V19l4-2 4 2v-4.8c1.8-1.1 3-3 3-5.2 0-3.5-3-6-7-6z"/>
+            <path d="M9.5 10.5h.01M14.5 10.5h.01"/>
+          </svg>
+          <span v-show="!sidebarPane.collapsed.value" class="sidebar-nav-label">AI 对话</span>
+        </button>
+      </nav>
+
+      <template v-if="!sidebarPane.collapsed.value">
+      <div class="sidebar-divider" />
+
       <div class="conv-sidebar-head">
-        <button type="button" class="btn-primary btn-new" @click="startNewConversation">
+        <span class="conv-sidebar-label">历史对话</span>
+      </div>
+      <div class="conv-sidebar-actions">
+        <button type="button" class="btn-new" @click="startNewConversation">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"/>
             <line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
           新建对话
         </button>
-        <button type="button" class="btn-icon" title="收起" @click="convSidebarOpen = false">
-          ‹
-        </button>
       </div>
-      <div v-loading="conversationsLoading || conversationSwitching" class="conv-list">
+      </template>
+      <button
+        v-else
+        type="button"
+        class="rail-btn rail-btn--primary"
+        title="新建对话"
+        @click="startNewConversation"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+      <div v-if="sidebarPane.collapsed.value" class="sidebar-rail-spacer" />
+      <div
+        v-show="!sidebarPane.collapsed.value"
+        v-loading="conversationsLoading || conversationSwitching"
+        class="conv-list"
+      >
         <button
           v-for="conv in conversations"
           :key="conv.id"
@@ -1022,34 +1211,23 @@ onUnmounted(() => {
           暂无历史对话
         </p>
       </div>
+
+      <div class="sidebar-foot">
+        <span class="status-dot" :class="{ on: auth.isLoggedIn }" />
+        <span v-show="!sidebarPane.collapsed.value" class="status-text">{{ auth.isLoggedIn ? 'session active' : 'offline' }}</span>
+        <span v-if="useMock && !sidebarPane.collapsed.value" class="mock-chip">mock</span>
+      </div>
     </aside>
 
+    <div
+      v-if="!sidebarPane.collapsed.value"
+      class="pane-resize-handle pane-resize-handle--col"
+      title="拖动调节侧边栏宽度，双击恢复默认"
+      @mousedown="(e) => sidebarPane.startResize(e, 'col')"
+      @dblclick="sidebarPane.reset()"
+    />
+
     <div class="chat-main">
-      <button
-        v-if="!convSidebarOpen"
-        type="button"
-        class="sidebar-toggle"
-        @click="convSidebarOpen = true"
-      >
-        ☰ 对话列表
-      </button>
-
-    <header class="chat-header">
-      <div class="chat-header-inner">
-        <div>
-          <h2>AI 对话</h2>
-          <p class="model-tag">Doubao-Seed-2.0-lite · 竞品分析多 Agent · Firecrawl MCP</p>
-        </div>
-        <button type="button" class="btn-ghost btn-sm" @click="startNewConversation">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-          新建对话
-        </button>
-      </div>
-    </header>
-
     <div ref="listRef" class="chat-list">
       <div
         v-for="msg in messages"
@@ -1242,13 +1420,104 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <footer class="chat-footer">
-      <div class="chat-input-box">
+    <div
+      v-if="!footerPane.collapsed.value"
+      class="pane-resize-handle pane-resize-handle--row"
+      title="拖动调节输入区高度，双击恢复默认"
+      @mousedown="(e) => footerPane.startResize(e, 'row')"
+      @dblclick="footerPane.reset()"
+    />
+
+    <footer
+      class="chat-footer"
+      :class="{ 'chat-footer--collapsed': footerPane.collapsed.value }"
+      :style="{ height: `${footerPane.effectiveSize.value}px` }"
+    >
+      <div class="chat-footer-toolbar">
+        <button
+          type="button"
+          class="pane-collapse-btn"
+          :title="footerPane.collapsed.value ? '展开输入区' : '收起输入区'"
+          @click="footerPane.toggleCollapse()"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path v-if="footerPane.collapsed.value" d="M6 9l6 6 6-6"/>
+            <path v-else d="M6 15l6-6 6 6"/>
+          </svg>
+        </button>
+        <span v-if="!footerPane.collapsed.value" class="footer-resize-hint">拖动上方横条可调节高度</span>
+      </div>
+      <div class="chat-footer-inner">
+      <div v-show="!footerPane.collapsed.value" class="chat-mode-bar">
+        <div class="mode-switch">
+          <button
+            type="button"
+            class="mode-btn"
+            :class="{ active: chatMode === 'chat' }"
+            @click="setChatMode('chat')"
+          >
+            普通对话
+          </button>
+          <button
+            type="button"
+            class="mode-btn"
+            :class="{ active: chatMode === 'analysis' }"
+            @click="setChatMode('analysis')"
+          >
+            竞品分析
+          </button>
+        </div>
+        <p v-if="chatMode === 'analysis'" class="mode-tip">
+          需填写至少 2 个竞品，支持同时分析多个产品
+        </p>
+      </div>
+
+      <div v-if="chatMode === 'analysis' && !footerPane.collapsed.value" class="analysis-panel">
+        <label class="analysis-label" for="analysis-competitors">竞品名称</label>
+        <input
+          id="analysis-competitors"
+          v-model="analysisCompetitors"
+          class="analysis-competitors-input"
+          type="text"
+          placeholder="例如：王老吉, 加多宝, 和其正（逗号 / 顿号 / 换行分隔）"
+          :disabled="loading"
+        />
+        <div v-if="parsedCompetitors.length" class="competitor-tags">
+          <span
+            v-for="name in parsedCompetitors"
+            :key="name"
+            class="competitor-tag"
+          >{{ name }}</span>
+          <span class="competitor-count" :class="{ ok: canSendAnalysis }">
+            {{ parsedCompetitors.length }} 个竞品
+          </span>
+        </div>
+        <div class="dimension-row">
+          <span class="analysis-label">分析维度</span>
+          <div class="dimension-chips">
+            <button
+              v-for="dim in ANALYSIS_DIMENSIONS"
+              :key="dim"
+              type="button"
+              class="dim-chip"
+              :class="{ active: analysisDimensions.includes(dim) }"
+              :disabled="loading"
+              @click="toggleAnalysisDimension(dim)"
+            >
+              {{ dim }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-input-box" :class="{ 'chat-input-box--analysis': chatMode === 'analysis' }">
         <textarea
           v-model="input"
           class="chat-input"
           rows="1"
-          placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+          :placeholder="chatMode === 'analysis'
+            ? '补充说明（可选），Enter 开始分析，Shift+Enter 换行'
+            : '输入消息，Enter 发送，Shift+Enter 换行'"
           :disabled="loading"
           @keydown="onKeydown"
         />
@@ -1265,7 +1534,8 @@ onUnmounted(() => {
             v-else
             type="button"
             class="btn-send"
-            :disabled="!input.trim()"
+            :class="{ 'btn-send--analysis': chatMode === 'analysis' }"
+            :disabled="chatMode === 'analysis' ? !canSendAnalysis : !input.trim()"
             @click="send"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1275,7 +1545,15 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-      <p class="chat-hint">CompeteAI · 竞品分析走多 Agent 流水线；普通问题走对话 + MCP 工具</p>
+      <p v-if="!footerPane.collapsed.value" class="chat-hint">
+        <template v-if="chatMode === 'analysis'">
+          竞品分析将启动多 Agent 流水线（Coordinator → Collector → Analyst → Writer → QA）
+        </template>
+        <template v-else>
+          普通对话由大模型直接回答，不会自动进入竞品分析流水线
+        </template>
+      </p>
+      </div>
     </footer>
     </div>
   </div>
@@ -1287,47 +1565,318 @@ onUnmounted(() => {
   flex-direction: row;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
   background: var(--bg-base);
 }
 
-.conv-sidebar {
-  width: 260px;
+.unified-sidebar {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border-subtle);
-  background: var(--bg-surface);
-  transition: width 0.2s, margin 0.2s;
+  background: var(--bg-panel);
+  min-height: 0;
+  transition: width 0.2s ease;
+  overflow: hidden;
 }
 
-.conv-sidebar.collapsed {
-  width: 0;
-  overflow: hidden;
+.unified-sidebar--collapsed {
+  background: linear-gradient(180deg, #fafafb 0%, #f4f4f6 100%);
+}
+
+.unified-sidebar--collapsed .sidebar-head {
+  align-items: center;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.unified-sidebar--collapsed .sidebar-brand {
+  justify-content: center;
+  padding: 12px 0 0;
+  width: 100%;
+}
+
+.unified-sidebar--collapsed .sidebar-nav {
+  align-items: center;
+  padding: 10px 0;
+  gap: 6px;
+}
+
+.unified-sidebar--collapsed .sidebar-nav-item {
+  width: 40px;
+  height: 40px;
+  justify-content: center;
+  padding: 0;
+  border-radius: 11px;
+}
+
+.unified-sidebar--collapsed .sidebar-nav-item:hover {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.unified-sidebar--collapsed .sidebar-nav-item.active {
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.22);
+}
+
+.unified-sidebar--collapsed .sidebar-nav-icon {
+  opacity: 0.5;
+}
+
+.unified-sidebar--collapsed .sidebar-nav-item:hover .sidebar-nav-icon,
+.unified-sidebar--collapsed .sidebar-nav-item.active .sidebar-nav-icon {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.unified-sidebar--collapsed .sidebar-foot {
+  justify-content: center;
+  padding: 14px 0 16px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: auto;
+}
+
+.unified-sidebar--collapsed .status-dot.on {
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.sidebar-head {
+  flex-shrink: 0;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 14px 12px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.sidebar-brand-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-collapse {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.sidebar-rail-spacer {
+  flex: 1;
+  min-height: 8px;
+}
+
+.rail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 36px;
+  margin: 0 auto;
   border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--text-muted);
+}
+
+.rail-btn--ghost {
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+}
+
+.rail-btn--ghost:hover {
+  color: var(--accent);
+  border-color: rgba(99, 102, 241, 0.35);
+  background: var(--accent-dim);
+}
+
+.rail-btn--primary {
+  margin-top: 4px;
+  background: linear-gradient(135deg, var(--accent), #7c3aed);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.28);
+}
+
+.rail-btn--primary:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.sidebar-brand:hover {
+  opacity: 0.85;
+}
+
+.sidebar-brand-mark {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--accent), #7c3aed);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.sidebar-brand-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 12px 8px;
+}
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: all 0.15s;
+}
+
+.sidebar-nav-icon {
+  flex-shrink: 0;
+  opacity: 0.45;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.sidebar-nav-item:hover .sidebar-nav-icon {
+  opacity: 0.75;
+}
+
+.sidebar-nav-item.active .sidebar-nav-icon {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.sidebar-nav-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sidebar-nav-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar-divider {
+  height: 1px;
+  margin: 4px 16px 8px;
+  background: var(--border-subtle);
+}
+
+.sidebar-foot {
+  margin-top: auto;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.status-dot.on {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+}
+
+.status-text {
+  flex: 1;
+}
+
+.mock-chip {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
 }
 
 .conv-sidebar-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px 14px 10px;
+}
+
+.conv-sidebar-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.conv-sidebar-actions {
+  padding: 0 12px 12px;
 }
 
 .btn-new {
-  flex: 1;
+  width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 9px 12px;
   font-size: 13px;
-  border: none;
+  font-weight: 500;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--el-color-primary);
-  color: #fff;
+  background: var(--bg-base);
+  color: var(--text-primary);
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
+
+.btn-new:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 
 .btn-icon {
   border: none;
@@ -1341,6 +1890,7 @@ onUnmounted(() => {
 
 .conv-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px;
 }
@@ -1431,61 +1981,14 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-}
-
-.sidebar-toggle {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 2;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-surface);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.chat-header {
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(16px);
-}
-
-.chat-header-inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 24px;
-  max-width: 1000px;
-  margin: 0 auto;
-  width: 100%;
-}
-
-.chat-header h2 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.model-tag {
-  margin: 3px 0 0;
-  font-size: 11px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-}
-
-.btn-sm {
-  font-size: 12px;
-  padding: 5px 12px;
+  overflow: hidden;
 }
 
 .chat-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 24px;
+  padding: 24px 24px 12px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -2055,7 +2558,6 @@ onUnmounted(() => {
   font-size: 14px;
   line-height: 1.65;
   color: var(--text-primary);
-  word-break: break-word;
 }
 
 .md-body :first-child {
@@ -2081,11 +2583,41 @@ onUnmounted(() => {
   margin: 0.8em 0 0.4em;
   line-height: 1.35;
   font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
-.md-body h1 { font-size: 1.35em; }
-.md-body h2 { font-size: 1.2em; }
-.md-body h3 { font-size: 1.05em; }
+.md-body h1 {
+  font-size: 1.35em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.md-body h2 {
+  font-size: 1.08em;
+  color: var(--text-primary);
+  margin-top: 1.1em;
+  padding-top: 0.25em;
+}
+
+.md-body h3 {
+  font-size: 1em;
+  color: var(--text-primary);
+}
+
+.md-body h2 + p,
+.md-body h3 + p {
+  margin-top: 0.45em;
+}
+
+.md-body > blockquote {
+  margin: 0.75em 0 1em;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--accent-dim);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
 
 .md-body ul,
 .md-body ol {
@@ -2132,37 +2664,6 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-.md-body table {
-  width: max-content;
-  min-width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.md-body .table-wrap {
-  overflow-x: auto;
-  margin: 0.75em 0;
-  max-width: 100%;
-  -webkit-overflow-scrolling: touch;
-}
-
-.md-body th,
-.md-body td {
-  padding: 8px 12px;
-  border: 1px solid var(--border-subtle);
-  vertical-align: top;
-  text-align: left;
-  white-space: normal;
-  min-width: 88px;
-  max-width: 360px;
-}
-
-.md-body th {
-  background: var(--bg-base);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .msg-row.user .bubble-text {
   background: rgba(99, 102, 241, 0.1);
   border-color: rgba(99, 102, 241, 0.2);
@@ -2189,9 +2690,203 @@ onUnmounted(() => {
 
 .chat-footer {
   flex-shrink: 0;
-  padding: 12px 24px 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 88px;
   border-top: 1px solid var(--border-subtle);
-  background: var(--bg-panel);
+  background: rgba(247, 247, 248, 0.96);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.04);
+}
+
+.chat-footer--collapsed .chat-footer-inner {
+  padding-top: 0;
+}
+
+.chat-footer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px 0;
+  flex-shrink: 0;
+}
+
+.footer-resize-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.chat-footer-inner {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 24px 12px;
+}
+
+.chat-mode-bar {
+  max-width: 1000px;
+  margin: 0 auto 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mode-switch {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-sans);
+}
+
+.mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.mode-btn.active {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}
+
+.mode-btn.active:last-child {
+  color: var(--accent);
+}
+
+.mode-tip {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.analysis-panel {
+  max-width: 1000px;
+  margin: 0 auto 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.analysis-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.analysis-competitors-input {
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--bg-base);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.analysis-competitors-input:focus {
+  border-color: var(--border-active);
+}
+
+.analysis-competitors-input:disabled {
+  opacity: 0.6;
+}
+
+.competitor-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.competitor-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+}
+
+.competitor-count {
+  font-size: 11px;
+  color: var(--danger);
+  font-family: var(--font-mono);
+}
+
+.competitor-count.ok {
+  color: var(--success);
+}
+
+.dimension-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dimension-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dim-chip {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-sans);
+}
+
+.dim-chip:hover {
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.dim-chip.active {
+  color: var(--accent);
+  border-color: rgba(99, 102, 241, 0.35);
+  background: var(--accent-dim);
+}
+
+.dim-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-input-box--analysis:focus-within {
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+.btn-send--analysis:not(:disabled) {
+  background: linear-gradient(135deg, #6366f1, #7c3aed);
 }
 
 .chat-input-box {
@@ -2278,7 +2973,7 @@ onUnmounted(() => {
 
 .chat-hint {
   max-width: 1000px;
-  margin: 8px auto 0;
+  margin: 6px auto 0;
   font-size: 10px;
   color: var(--text-muted);
   text-align: center;

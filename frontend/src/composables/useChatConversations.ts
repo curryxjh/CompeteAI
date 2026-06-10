@@ -13,7 +13,7 @@ import {
 } from '@/api/conversation'
 
 const WELCOME_TEXT =
-  '你好，我是 CompeteAI 助手。你可以直接描述竞品分析任务（例如「分析 Cursor 与 GitHub Copilot 的功能、定价与 SWOT」），我会启动多 Agent 流水线并展示完整执行过程；也可以进行普通对话。'
+  '你好，我是 CompeteAI 助手。需要竞品分析时，请切换到输入框上方的「竞品分析」模式，填写至少 2 个竞品名称后启动多 Agent 流水线；普通问题请使用「普通对话」模式。'
 
 export function welcomeMessage(): ChatMessageRecord {
   return {

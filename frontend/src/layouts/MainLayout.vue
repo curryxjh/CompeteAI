@@ -3,6 +3,16 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { usePaneResize } from '@/composables/usePaneResize'
+
+const layoutSidebar = usePaneResize({
+  storageKey: 'competeai_layout_sidebar_w',
+  defaultSize: 256,
+  min: 200,
+  max: 360,
+  collapseKey: 'competeai_layout_sidebar_collapsed',
+  collapsedSize: 68,
+})
 
 const route = useRoute()
 const router = useRouter()
@@ -16,6 +26,8 @@ const activeMenu = computed(() => {
 })
 
 const pageTitle = computed(() => (route.meta.title as string) ?? 'CompeteAI')
+
+const isChat = computed(() => route.name === 'chat')
 
 function go(path: string) {
   router.push(path)
@@ -38,8 +50,13 @@ async function onTestPing() {
 </script>
 
 <template>
-  <div class="shell">
-    <aside class="sidebar">
+  <div class="shell" :class="{ 'shell--chat': isChat }">
+    <aside
+      v-if="!isChat"
+      class="sidebar"
+      :class="{ 'sidebar--collapsed': layoutSidebar.collapsed.value }"
+      :style="{ width: `${layoutSidebar.effectiveSize.value}px` }"
+    >
       <div class="brand" @click="go('/')">
         <div class="brand-mark">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -48,17 +65,29 @@ async function onTestPing() {
             <path d="M2 12l10 5 10-5"/>
           </svg>
         </div>
-        <div class="brand-text">
+        <div v-show="!layoutSidebar.collapsed.value" class="brand-text">
           <div class="brand-name">CompeteAI</div>
           <div class="brand-sub">agent workspace</div>
         </div>
+        <button
+          type="button"
+          class="pane-collapse-btn sidebar-collapse"
+          :title="layoutSidebar.collapsed.value ? '展开侧边栏' : '收起侧边栏'"
+          @click.stop="layoutSidebar.toggleCollapse()"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path v-if="layoutSidebar.collapsed.value" d="M9 18l6-6-6-6"/>
+            <path v-else d="M15 18l-6-6 6-6"/>
+          </svg>
+        </button>
       </div>
 
       <nav class="nav">
-        <div class="nav-label">Workspace</div>
+        <div v-show="!layoutSidebar.collapsed.value" class="nav-label">Workspace</div>
         <button
           class="nav-item"
           :class="{ active: activeMenu === '/' }"
+          title="任务管理"
           @click="go('/')"
         >
           <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -66,43 +95,54 @@ async function onTestPing() {
             <rect x="9" y="3" width="6" height="4" rx="1"/>
             <path d="M9 12h6M9 16h4"/>
           </svg>
-          <span>任务管理</span>
+          <span class="nav-label-text">任务管理</span>
         </button>
         <button
           class="nav-item"
           :class="{ active: activeMenu === '/agents' }"
+          title="Agent 能力"
           @click="go('/agents')"
         >
           <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.4V12h1a7 7 0 0 1 7 7v1H3v-1a7 7 0 0 1 7-7h1V9.4A4 4 0 0 1 12 2z"/>
             <path d="M9 20v1a3 3 0 0 0 6 0v-1"/>
           </svg>
-          <span>Agent 能力</span>
+          <span class="nav-label-text">Agent 能力</span>
         </button>
         <button
           class="nav-item"
           :class="{ active: activeMenu === '/chat' }"
+          title="AI 对话"
           @click="go('/chat')"
         >
           <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 3c-4 0-7 2.5-7 6 0 2.2 1.2 4.1 3 5.2V19l4-2 4 2v-4.8c1.8-1.1 3-3 3-5.2 0-3.5-3-6-7-6z"/>
             <path d="M9.5 10.5h.01M14.5 10.5h.01"/>
           </svg>
-          <span>AI 对话</span>
+          <span class="nav-label-text">AI 对话</span>
         </button>
       </nav>
 
       <div class="sidebar-foot">
         <span class="status-dot" :class="{ on: auth.isLoggedIn }" />
-        <span class="status-text">{{ auth.isLoggedIn ? 'session active' : 'offline' }}</span>
-        <span v-if="useMock" class="mock-chip">mock</span>
+        <span v-show="!layoutSidebar.collapsed.value" class="status-text">{{ auth.isLoggedIn ? 'session active' : 'offline' }}</span>
+        <span v-if="useMock && !layoutSidebar.collapsed.value" class="mock-chip">mock</span>
       </div>
     </aside>
+
+    <div
+      v-if="!isChat && !layoutSidebar.collapsed.value"
+      class="pane-resize-handle pane-resize-handle--col"
+      title="拖动调节侧边栏宽度，双击恢复默认"
+      @mousedown="(e) => layoutSidebar.startResize(e, 'col')"
+      @dblclick="layoutSidebar.reset()"
+    />
 
     <div class="main-col">
       <header class="topbar">
         <div class="topbar-left">
-          <h1 class="topbar-title">{{ pageTitle }}</h1>
+          <h1 v-if="!isChat" class="topbar-title">{{ pageTitle }}</h1>
+          <p v-else class="topbar-chat-tag">Doubao-Seed-2.0-lite · 多 Agent · Firecrawl MCP</p>
         </div>
         <div class="topbar-right">
           <template v-if="auth.isLoggedIn">
@@ -131,23 +171,64 @@ async function onTestPing() {
   background: var(--bg-base);
 }
 
+.shell--chat {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.shell--chat .main-col {
+  min-height: 0;
+}
+
+.shell--chat .content--flush {
+  flex: 1;
+  min-height: 0;
+}
+
 /* ---- Sidebar ---- */
 .sidebar {
-  width: var(--sidebar-w);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-panel);
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+
+.sidebar--collapsed .brand {
+  justify-content: center;
+  padding: 20px 10px 12px;
+}
+
+.sidebar--collapsed .sidebar-collapse {
+  position: absolute;
+  right: 8px;
+  top: 16px;
+}
+
+.sidebar--collapsed .nav-item {
+  justify-content: center;
+  padding: 12px;
+}
+
+.sidebar--collapsed .sidebar-foot {
+  justify-content: center;
+  padding: 16px 10px;
 }
 
 .brand {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 24px 22px;
+  padding: 24px 22px 20px;
   cursor: pointer;
   transition: opacity 0.15s;
+}
+
+.sidebar-collapse {
+  margin-left: auto;
 }
 
 .brand:hover {
@@ -315,6 +396,13 @@ async function onTestPing() {
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
+}
+
+.topbar-chat-tag {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .topbar-right {
