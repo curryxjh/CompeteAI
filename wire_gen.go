@@ -6,29 +6,10 @@
 
 package main
 
-import (
-	"CompeteAI/internal/repository"
-	"CompeteAI/internal/repository/cache"
-	"CompeteAI/internal/repository/dao"
-	"CompeteAI/internal/service"
-	"CompeteAI/internal/web"
-	"CompeteAI/internal/web/jwt"
-	"CompeteAI/ioc"
-	"github.com/gin-gonic/gin"
-)
+import "CompeteAI/internal/app"
 
-// Injectors from wire.go:
+import "github.com/gin-gonic/gin"
 
 func InitWebServer() *gin.Engine {
-	cmdable := ioc.InitRedis()
-	handler := jwt.NewRedisJwtHandler(cmdable)
-	v := ioc.InitMiddlewares(cmdable, handler)
-	db := ioc.InitDB()
-	userDao := dao.NewUserDao(db)
-	userCache := cache.NewUserCache(cmdable)
-	userRepository := repository.NewUserRepository(userDao, userCache)
-	userService := service.NewUserService(userRepository)
-	userHandler := web.NewUserHandler(userService, cmdable)
-	engine := ioc.InitWebServer(v, userHandler)
-	return engine
+	return app.InitWebServer()
 }

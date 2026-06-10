@@ -25,16 +25,44 @@ func InitWebServer() *gin.Engine {
 		
 		// DAO
 		dao.NewUserDao,
+		dao.NewTaskDao,
+		dao.NewReportDao,
+		dao.NewTraceDao,
+		dao.NewDeadLetterDao,
 		cache.NewUserCache,
 		// Repository
 		repository.NewUserRepository,
+		repository.NewTaskRepository,
+		repository.NewReportRepository,
+		repository.NewTraceRepository,
 		// Service
 		service.NewUserService,
+		service.NewAgentRegistry,
+		service.NewWorkflowEngine,
+		service.NewTaskService,
+		service.NewOpsService,
+		service.NewReportService,
+		service.NewTraceService,
+		// Eino Chat + Firecrawl MCP
+		ioc.InitFirecrawlTools,
+		ioc.InitChatService,
+		ioc.InitKafkaBus,
+		ioc.InitKafkaRouter,
+		ioc.InitEventHub,
 		// Handler
 		ijwt.NewRedisJwtHandler,
 		web.NewUserHandler,
+		web.NewChatHandler,
+		web.NewMCPHandler,
+		web.NewTaskHandler,
+		web.NewOpsHandler,
+		web.NewMemoryHandler,
+		web.NewReportHandler,
+		web.NewTraceHandler,
+		web.NewAgentHandler,
 
-		// middlewares
+		ioc.InitOutboxPublisher,
+		ioc.InitMemoryService,
 		ioc.InitMiddlewares,
 
 		ioc.InitWebServer,
