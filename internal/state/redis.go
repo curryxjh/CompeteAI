@@ -77,13 +77,15 @@ func ClearTaskMemory(ctx context.Context, bb *MemoryBlackboard, taskID string) e
 	return nil
 }
 
-// NewBlackboard 按配置选择内存或 Redis（§12）。
-func NewBlackboard(useRedis bool, redisClient redis.Cmdable, _ string) Blackboard {
+// NewBlackboard 按配置选择 Redis 或全局共享 MemoryBlackboard（§12）。
+// 修复：内存模式下通过 GlobalRegistry 确保同一 taskID 共享同一实例，
+// 避免每次调用返回空实例导致多 Agent 状态传递失效。
+func NewBlackboard(useRedis bool, redisClient redis.Cmdable, taskID string) Blackboard {
 	if settings.Conf != nil && settings.Conf.Mode == "prod" && (!useRedis || redisClient == nil) {
 		panic("prod mode requires Redis blackboard; memory forbidden")
 	}
 	if useRedis && redisClient != nil {
 		return NewRedisBlackboard(redisClient)
 	}
-	return NewMemoryBlackboard()
+	return GlobalRegistry().GetOrCreate(taskID)
 }

@@ -61,6 +61,50 @@ func (r *ScopeResolver) ResolveIDs(ctx context.Context, req ScopeResolveRequest)
 	return ids
 }
 
+// ResolveKeys 返回 ScopeResolver 解析到的 scope_key 列表（供 Milvus 过滤用）。
+// 与 ResolveIDs 返回的 UUID 列表一一对应。
+func (r *ScopeResolver) ResolveKeys(ctx context.Context, req ScopeResolveRequest) []string {
+	if r.dao == nil {
+		return nil
+	}
+	projectID := req.ProjectID
+	if projectID == "" {
+		projectID = defaultProjectID
+	}
+	wsID := req.WorkspaceID
+	if wsID == "" {
+		wsID = defaultWorkspaceID
+	}
+
+	type entry struct{ scopeType, key string }
+	entries := []entry{
+		{string(ScopeGlobal), "default"},
+		{string(ScopeProject), projectID},
+		{string(ScopeWorkspace), wsID},
+	}
+	if req.UserID > 0 {
+		entries = append(entries, entry{string(ScopeUser), fmt.Sprintf("user:%d", req.UserID)})
+	}
+	for _, comp := range req.Competitors {
+		entries = append(entries, entry{string(ScopeEntity), "entity:" + NormalizeName(comp)})
+	}
+
+	seen := map[string]struct{}{}
+	var keys []string
+	for _, e := range entries {
+		row, err := r.dao.GetScopeByTypeKey(ctx, e.scopeType, e.key)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[row.ScopeKey]; ok {
+			continue
+		}
+		seen[row.ScopeKey] = struct{}{}
+		keys = append(keys, row.ScopeKey)
+	}
+	return keys
+}
+
 // ScopeIDsForPreferences 返回用于加载偏好的 scope ID（含类型信息）。
 func (r *ScopeResolver) ScopeIDsForPreferences(ctx context.Context, req ScopeResolveRequest) []scopePrefRef {
 	if r.dao == nil {
