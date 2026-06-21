@@ -1,4 +1,4 @@
-package eino
+package llm
 
 import (
 	"encoding/json"

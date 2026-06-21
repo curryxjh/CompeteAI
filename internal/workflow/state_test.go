@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/state"
 	"testing"
 )
@@ -29,9 +28,9 @@ func TestShouldRunAgentRework(t *testing.T) {
 }
 
 func TestTargetAgentForIssues(t *testing.T) {
-	target := TargetAgentForIssues([]protocol.Issue{
-		{Category: protocol.IssueReportStructure},
-		{Category: protocol.IssueSourceMissing},
+	target := TargetAgentForIssues([]domain.Issue{
+		{Category: domain.IssueReportStructure},
+		{Category: domain.IssueSourceMissing},
 	})
 	if target != domain.AgentCollector {
 		t.Fatalf("expected collector, got %s", target)
@@ -39,8 +38,8 @@ func TestTargetAgentForIssues(t *testing.T) {
 }
 
 func TestRouteQARejectMaxRounds(t *testing.T) {
-	out := RouteQAReject(&protocol.QAResultPayload{
-		Result: protocol.QAResultReject, TargetAgent: "analyst",
+	out := RouteQAReject(&domain.QAResultPayload{
+		Result: domain.QAResultReject, TargetAgent: "analyst",
 	}, state.WorkflowState{Round: 3, MaxRounds: 3})
 	if !out.Failed {
 		t.Fatal("should fail when round >= maxRounds")

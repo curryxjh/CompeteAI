@@ -2,7 +2,7 @@ package web
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/eventlog"
+	"CompeteAI/internal/event"
 	"CompeteAI/internal/repository"
 	"CompeteAI/internal/service"
 	ijwt "CompeteAI/internal/web/jwt"
@@ -18,11 +18,11 @@ import (
 
 type TaskHandler struct {
 	svc service.TaskService
-	log *eventlog.Reader
+	log *event.Reader
 }
 
-func NewTaskHandler(svc service.TaskService, hub *eventlog.HybridHub) *TaskHandler {
-	var reader *eventlog.Reader
+func NewTaskHandler(svc service.TaskService, hub *event.HybridHub) *TaskHandler {
+	var reader *event.Reader
 	if hub != nil {
 		reader = hub.Reader()
 	}
@@ -151,7 +151,7 @@ func (h *TaskHandler) Stream(c *gin.Context) {
 			return false
 		}
 		for _, rec := range rows {
-			writeEvent(eventlog.SSEEventName(rec.EventType), rec.Payload)
+			writeEvent(event.SSEEventName(rec.EventType), rec.Payload)
 			lastSeq = rec.SequenceNo
 			if rec.EventType == "task_completed" || rec.EventType == "task_failed" {
 				return true

@@ -1,7 +1,7 @@
 package bus
 
 import (
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/domain"
 	"context"
 	"testing"
 	"time"
@@ -14,7 +14,7 @@ func TestMemoryBusRunConsumesPublished(t *testing.T) {
 		done <- struct{}{}
 		return nil
 	})
-	env := protocol.NewEnvelope("t1", "tr1", "api", "coordinator", protocol.MsgTaskCreated, nil)
+	env := domain.NewEnvelope("t1", "tr1", "api", "coordinator", domain.MsgTaskCreated, nil)
 	if err := b.Publish(context.Background(), TopicTaskCreate, env); err != nil {
 		t.Fatal(err)
 	}

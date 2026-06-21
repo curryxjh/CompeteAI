@@ -2,7 +2,6 @@ package agent
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/eino"
 	"CompeteAI/internal/llm"
 	"context"
 	"errors"
@@ -12,7 +11,7 @@ import (
 // Registry 管理全部 Agent 实例。
 type Registry struct {
 	order  []domain.AgentName
-	agents map[domain.AgentName]Agent
+	agents map[domain.AgentName]domain.Agent
 }
 
 func NewRegistry(deps Deps) *Registry {
@@ -26,7 +25,7 @@ func NewRegistry(deps Deps) *Registry {
 			domain.AgentWriter,
 			domain.AgentQA,
 		},
-		agents: map[domain.AgentName]Agent{},
+		agents: map[domain.AgentName]domain.Agent{},
 	}
 	r.agents[domain.AgentCoordinator] = NewCoordinator()
 	r.agents[domain.AgentCollector] = NewCollector(tools)
@@ -36,7 +35,7 @@ func NewRegistry(deps Deps) *Registry {
 	return r
 }
 
-func (r *Registry) Get(name domain.AgentName) (Agent, bool) {
+func (r *Registry) Get(name domain.AgentName) (domain.Agent, bool) {
 	a, ok := r.agents[name]
 	return a, ok
 }
@@ -51,7 +50,9 @@ func (r *Registry) Cards() []WebAgentCard {
 	out := make([]WebAgentCard, 0, len(r.order))
 	for _, name := range r.order {
 		if a, ok := r.agents[name]; ok {
-			out = append(out, a.Card().ToWeb())
+			if carder, ok := a.(interface{ Card() AgentCard }); ok {
+				out = append(out, carder.Card().ToWeb())
+			}
 		}
 	}
 	return out
@@ -62,15 +63,18 @@ func (r *Registry) Card(name domain.AgentName) (WebAgentCard, bool) {
 	if !ok {
 		return WebAgentCard{}, false
 	}
-	return a.Card().ToWeb(), true
+	if carder, ok := a.(interface{ Card() AgentCard }); ok {
+		return carder.Card().ToWeb(), true
+	}
+	return WebAgentCard{}, false
 }
 
 // EinoChatAdapter 将 ChatService 适配为 ChatClient。
 type EinoChatAdapter struct {
-	svc *eino.ChatService
+	svc *llm.ChatService
 }
 
-func NewEinoChatAdapter(svc *eino.ChatService) *EinoChatAdapter {
+func NewEinoChatAdapter(svc *llm.ChatService) *EinoChatAdapter {
 	return &EinoChatAdapter{svc: svc}
 }
 
@@ -84,16 +88,16 @@ func (a *EinoChatAdapter) StreamChat(
 	onChunk func(eventType, content string),
 ) (string, error) {
 	var full strings.Builder
-	err := a.svc.StreamChat(ctx, []llm.Message{
+	err := a.svc.StreamChat(ctx, []domain.ChatMessage{
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
-	}, func(ev eino.StreamEvent) error {
+	}, func(ev llm.StreamEvent) error {
 		switch ev.Type {
-		case eino.StreamEventThinking:
+		case llm.StreamEventThinking:
 			if onChunk != nil && ev.Content != "" {
 				onChunk("thinking", ev.Content)
 			}
-		case eino.StreamEventContent:
+		case llm.StreamEventContent:
 			full.WriteString(ev.Content)
 			if onChunk != nil && ev.Content != "" {
 				onChunk("content", ev.Content)
@@ -112,10 +116,10 @@ func (a *EinoChatAdapter) StreamChat(
 
 // EinoToolAdapter 将 ToolRegistry 适配为 ToolInvoker。
 type EinoToolAdapter struct {
-	reg *eino.ToolRegistry
+	reg *llm.ToolRegistry
 }
 
-func NewEinoToolAdapter(reg *eino.ToolRegistry) *EinoToolAdapter {
+func NewEinoToolAdapter(reg *llm.ToolRegistry) *EinoToolAdapter {
 	return &EinoToolAdapter{reg: reg}
 }
 

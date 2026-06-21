@@ -2,7 +2,6 @@ package agent
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/state"
 	"context"
 	"fmt"
@@ -32,16 +31,17 @@ func (a *Analyst) Card() AgentCard {
 	}
 }
 
-func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) (RunOutput, error) {
-	store := state.ForTask(bb, input.TaskID)
+func (a *Analyst) Run(ctx context.Context, input domain.RunInput, bb any) (domain.RunOutput, error) {
+	blackboard := bb.(state.Blackboard)
+	store := state.ForTask(blackboard, input.TaskID)
 
 	meta, err := store.LoadTaskMeta(ctx)
 	if err != nil {
-		return RunOutput{}, &protocol.AgentError{Kind: protocol.ErrorKindFatal, Message: "task meta not found"}
+		return domain.RunOutput{}, &domain.AgentError{Kind: domain.ErrorKindFatal, Message: "task meta not found"}
 	}
 	coll, err := store.LoadCollectorOutput(ctx)
 	if err != nil {
-		return RunOutput{}, &protocol.AgentError{Kind: protocol.ErrorKindFatal, Message: "collector output not found"}
+		return domain.RunOutput{}, &domain.AgentError{Kind: domain.ErrorKindFatal, Message: "collector output not found"}
 	}
 
 	rework := ""
@@ -91,8 +91,8 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 		}
 	})
 	if err != nil {
-		return RunOutput{}, &protocol.AgentError{
-			Kind:      protocol.ErrorKindRetryable,
+		return domain.RunOutput{}, &domain.AgentError{
+			Kind:      domain.ErrorKindRetryable,
 			Message:   err.Error(),
 			Retryable: true,
 		}
@@ -102,7 +102,7 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 
 	var partial state.AnalysisOutput
 	if err := parseJSONFromLLM(raw, &partial); err != nil {
-		return RunOutput{}, &protocol.AgentError{Kind: protocol.ErrorKindFatal, Message: "parse analysis json: " + err.Error()}
+		return domain.RunOutput{}, &domain.AgentError{Kind: domain.ErrorKindFatal, Message: "parse analysis json: " + err.Error()}
 	}
 	if partial.SWOT == nil {
 		partial.SWOT = map[string]domain.SWOTAnalysis{}
@@ -114,7 +114,7 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 	enrichAnalysisSources(&partial, coll.Sources)
 
 	if err := store.SaveAnalysisOutput(ctx, partial); err != nil {
-		return RunOutput{}, err
+		return domain.RunOutput{}, err
 	}
 
 	summary := truncate(partial.Summary, 120)
@@ -129,7 +129,7 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 	for k := range partial.SWOT {
 		swotKeys = append(swotKeys, k)
 	}
-	analysisPayload := protocol.AnalysisPayload{
+	analysisPayload := domain.AnalysisPayload{
 		Summary:      summary,
 		SWOTKeys:     swotKeys,
 		FeatureCount: len(partial.Features),
@@ -137,20 +137,20 @@ func (a *Analyst) Run(ctx context.Context, input RunInput, bb state.Blackboard) 
 		PersonaCount: len(partial.Personas),
 	}
 
-	return RunOutput{
+	return domain.RunOutput{
 		Status:      domain.AgentRunCompleted,
 		NextAgent:   ptrAgent(domain.AgentWriter),
-		MessageType: string(protocol.MsgAnalysisReady),
+		MessageType: string(domain.MsgAnalysisReady),
 		Payload:     analysisPayload,
 		Summary:     summary,
-		Artifacts: []protocol.ArtifactRef{
-			protocol.NewArtifactRef(protocol.ArtifactAnalysisResult, state.AnalysisResultKey(input.TaskID), partial.Version),
+		Artifacts: []domain.ArtifactRef{
+			domain.NewArtifactRef(domain.ArtifactAnalysisResult, state.AnalysisResultKey(input.TaskID), partial.Version),
 		},
 		Metadata: map[string]any{"token_hint": len(raw)},
 	}, nil
 }
 
-func (a *Analyst) runQAQuery(ctx context.Context, input RunInput, store state.TaskStore, coll state.CollectorOutput) (RunOutput, error) {
+func (a *Analyst) runQAQuery(ctx context.Context, input domain.RunInput, store state.TaskStore, coll state.CollectorOutput) (domain.RunOutput, error) {
 	claim, _ := input.Payload["claim"].(string)
 	query, _ := input.Payload["query"].(string)
 	if claim == "" {
@@ -176,10 +176,10 @@ func (a *Analyst) runQAQuery(ctx context.Context, input RunInput, store state.Ta
 		answer = strings.Join(evidence, "\n")
 	}
 	EmitProgress(ctx, "note", "证据检索完成", "done")
-	return RunOutput{
+	return domain.RunOutput{
 		Status: domain.AgentRunCompleted, Summary: answer,
-		MessageType: string(protocol.MsgAnalysisReady),
-		Payload: protocol.AnalystResponsePayload{
+		MessageType: string(domain.MsgAnalysisReady),
+		Payload: domain.AnalystResponsePayload{
 			Claim: claim, Evidence: answer, Explanation: answer,
 		},
 	}, nil

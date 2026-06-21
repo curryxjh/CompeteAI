@@ -1,7 +1,7 @@
 package bus
 
 import (
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/domain"
 	"context"
 	"testing"
 )
@@ -13,7 +13,7 @@ func TestMemoryBusPublishDoesNotAutoConsume(t *testing.T) {
 		got = true
 		return nil
 	})
-	env := protocol.NewEnvelope("t1", "tr1", "api", "coordinator", protocol.MsgTaskCreated, nil)
+	env := domain.NewEnvelope("t1", "tr1", "api", "coordinator", domain.MsgTaskCreated, nil)
 	_ = b.Publish(context.Background(), TopicTaskCreate, env)
 	if got {
 		t.Fatal("publish must not invoke handler before Run")

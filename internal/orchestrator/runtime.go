@@ -2,11 +2,9 @@ package orchestrator
 
 import (
 	"CompeteAI/internal/bus"
-	"CompeteAI/internal/dlq"
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/eventlog"
-	"CompeteAI/internal/metrics"
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/event"
+	"CompeteAI/internal/pkg/metrics"
 	"CompeteAI/internal/repository"
 	"CompeteAI/internal/repository/dao"
 	"CompeteAI/internal/workflow"
@@ -21,9 +19,9 @@ type Runtime struct {
 	engine   *workflow.Engine
 	bus      bus.Bus
 	store    *Store
-	events   *eventlog.Publisher
+	events   *event.Publisher
 	msgLog   *dao.MessageLogDao
-	dlq      *dlq.Handler
+	dlq      *bus.DLQHandler
 	tasks    repository.TaskRepository
 	workerID string
 	role     string
@@ -34,9 +32,9 @@ type Config struct {
 	Engine   *workflow.Engine
 	Bus      bus.Bus
 	Store    *Store
-	Events   *eventlog.Publisher
+	Events   *event.Publisher
 	MsgLog   *dao.MessageLogDao
-	DLQ      *dlq.Handler
+	DLQ      *bus.DLQHandler
 	Tasks    repository.TaskRepository
 	WorkerID string
 	Role     string
@@ -111,7 +109,7 @@ func (r *Runtime) wrapHandler(topic string) bus.Handler {
 
 		metrics.IncMessageRetry()
 		nextAttempt := env.Attempt + 1
-		if nextAttempt >= dlq.MaxAttempts && r.dlq != nil {
+		if nextAttempt >= bus.MaxAttempts && r.dlq != nil {
 			reason := err.Error()
 			_ = r.dlq.MoveToDLQ(ctx, agent, topic, env, reason)
 			_ = r.msgLog.MarkFailed(ctx, env.MessageID, reason)
@@ -159,7 +157,7 @@ func (r *Runtime) PublishEvent(ctx context.Context, taskID, traceID, eventType, 
 	if r.events == nil {
 		return
 	}
-	_, _ = r.events.Publish(ctx, taskID, traceID, eventlog.MapLegacyEvent(eventType), agent, payload)
+	_, _ = r.events.Publish(ctx, taskID, traceID, event.MapLegacyEvent(eventType), agent, payload)
 }
 
 type Recovery struct {
@@ -192,7 +190,7 @@ func (rec *Recovery) RunOnce(ctx context.Context) {
 			agent := domain.AgentCoordinator
 			traceID := orchestratorTraceID(cp, ok)
 			topic := bus.AgentCommandTopic(agent)
-			env := protocol.NewEnvelope(t.ID, traceID, "recovery", string(agent), protocol.MsgTaskCreated, nil)
+			env := domain.NewEnvelope(t.ID, traceID, "recovery", string(agent), domain.MsgTaskCreated, nil)
 			_ = rec.bus.Publish(ctx, topic, env)
 		}
 	}

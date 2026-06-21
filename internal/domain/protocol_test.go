@@ -1,22 +1,20 @@
-package protocol
+package domain
 
 import (
 	"testing"
-
-	"CompeteAI/internal/domain"
 )
 
 func TestDefaultReceiver(t *testing.T) {
 	cases := []struct {
 		msgType MessageType
-		want    domain.AgentName
+		want    AgentName
 	}{
-		{MsgTaskCreated, domain.AgentCoordinator},
-		{MsgPlanReady, domain.AgentCollector},
-		{MsgMaterialsReady, domain.AgentAnalyst},
-		{MsgAnalysisReady, domain.AgentWriter},
-		{MsgReportReady, domain.AgentQA},
-		{MsgQAPass, domain.AgentName("api")},
+		{MsgTaskCreated, AgentCoordinator},
+		{MsgPlanReady, AgentCollector},
+		{MsgMaterialsReady, AgentAnalyst},
+		{MsgAnalysisReady, AgentWriter},
+		{MsgReportReady, AgentQA},
+		{MsgQAPass, AgentName("api")},
 	}
 	for _, c := range cases {
 		if got := DefaultReceiver(c.msgType, nil); got != c.want {
@@ -27,7 +25,7 @@ func TestDefaultReceiver(t *testing.T) {
 
 func TestReworkTarget(t *testing.T) {
 	payload := QAResultPayload{TargetAgent: "writer"}
-	if got := ReworkTarget(payload); got != domain.AgentWriter {
+	if got := ReworkTarget(payload); got != AgentWriter {
 		t.Fatalf("ReworkTarget = %s, want writer", got)
 	}
 }
@@ -49,7 +47,7 @@ func TestRouteNextTopics(t *testing.T) {
 	if dec := RouteNext(MsgMaterialsReady, nil); dec.Topic != "analyst.input" {
 		t.Fatalf("topic = %s", dec.Topic)
 	}
-	if dec := RouteNext(MsgQAReject, QAResultPayload{TargetAgent: "analyst"}); dec.ToAgent != domain.AgentAnalyst {
+	if dec := RouteNext(MsgQAReject, QAResultPayload{TargetAgent: "analyst"}); dec.ToAgent != AgentAnalyst {
 		t.Fatalf("toAgent = %s", dec.ToAgent)
 	}
 }

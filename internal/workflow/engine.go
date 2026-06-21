@@ -4,11 +4,9 @@ import (
 	"CompeteAI/internal/agent"
 	"CompeteAI/internal/bus"
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/eventlog"
-	"CompeteAI/internal/kafka"
+	"CompeteAI/internal/event"
 	"CompeteAI/internal/memory"
-	"CompeteAI/internal/metrics"
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/pkg/metrics"
 	"CompeteAI/internal/repository"
 	"CompeteAI/internal/state"
 	"context"
@@ -27,9 +25,9 @@ type Engine struct {
 	tasks           repository.TaskRepository
 	reports         repository.ReportRepository
 	traces          repository.TraceRepository
-	hub             *eventlog.HybridHub
+	hub             *event.HybridHub
 	bus             bus.Bus
-	router          *kafka.Router
+	router          *bus.Router
 	redis           redis.Cmdable
 	useRedisBB      bool
 	maxAgentRetries int
@@ -42,9 +40,9 @@ func NewEngine(
 	tasks repository.TaskRepository,
 	reports repository.ReportRepository,
 	traces repository.TraceRepository,
-	hub *eventlog.HybridHub,
+	hub *event.HybridHub,
 	bus bus.Bus,
-	router *kafka.Router,
+	router *bus.Router,
 	redisClient redis.Cmdable,
 	useRedisBB bool,
 	maxAgentRetries int,
@@ -86,14 +84,14 @@ func (e *Engine) Run(ctx context.Context, taskID string) error {
 }
 
 func (e *Engine) handleQAReject(ctx context.Context, store state.TaskStore, task *domain.Task, trace *domain.Trace, traceID string, payload any) (continueLoop bool, err error) {
-	qaPayload := protocol.QAResultPayload{}
-	if p, ok := payload.(protocol.QAResultPayload); ok {
+	qaPayload := domain.QAResultPayload{}
+	if p, ok := payload.(domain.QAResultPayload); ok {
 		qaPayload = p
 	}
 
 	wf, _ := store.LoadWorkflowState(ctx)
 	route := Route(RouteInput{
-		MessageType: protocol.MsgQAReject,
+		MessageType: domain.MsgQAReject,
 		FromAgent:   domain.AgentQA,
 		QA:          &qaPayload,
 		Workflow:    wf,
@@ -207,9 +205,9 @@ func (e *Engine) markAgentRejected(task *domain.Task, target domain.AgentName) {
 	}
 }
 
-func (e *Engine) runAgentWithRetry(ctx context.Context, ag agent.Agent, input agent.RunInput, bb state.Blackboard) (agent.RunOutput, error) {
+func (e *Engine) runAgentWithRetry(ctx context.Context, ag domain.Agent, input domain.RunInput, bb state.Blackboard) (domain.RunOutput, error) {
 	var lastErr error
-	var lastOut agent.RunOutput
+	var lastOut domain.RunOutput
 	for i := 0; i < e.maxAgentRetries; i++ {
 		retryInput := input
 		retryInput.Attempt = input.Attempt + i
@@ -219,12 +217,12 @@ func (e *Engine) runAgentWithRetry(ctx context.Context, ag agent.Agent, input ag
 		}
 		lastOut = out
 		lastErr = err
-		var ae *protocol.AgentError
+		var ae *domain.AgentError
 		if errors.As(err, &ae) {
-			if ae.Kind == protocol.ErrorKindClarificationRequired {
+			if ae.Kind == domain.ErrorKindClarificationRequired {
 				return out, err
 			}
-			if ae.Retryable || ae.Kind == protocol.ErrorKindRetryable {
+			if ae.Retryable || ae.Kind == domain.ErrorKindRetryable {
 				continue
 			}
 		}
@@ -274,7 +272,7 @@ func (e *Engine) completeTask(ctx context.Context, taskID string, store state.Ta
 	if err := e.traces.Save(ctx, trace); err != nil {
 		return err
 	}
-	_ = e.router.PublishTaskCompleted(ctx, taskID, traceID, protocol.TaskCompletedPayload{
+	_ = e.router.PublishTaskCompleted(ctx, taskID, traceID, domain.TaskCompletedPayload{
 		TaskID: taskID, Title: report.Title, QAScore: report.QAScore,
 	})
 
@@ -344,7 +342,7 @@ func (e *Engine) setAgentRunning(_ context.Context, task *domain.Task, name doma
 	task.UpdatedAt = now
 }
 
-func (e *Engine) applyAgentStatus(_ context.Context, task *domain.Task, name domain.AgentName, out agent.RunOutput) {
+func (e *Engine) applyAgentStatus(_ context.Context, task *domain.Task, name domain.AgentName, out domain.RunOutput) {
 	now := time.Now().Format(time.RFC3339)
 	st := domain.AgentRunCompleted
 	if out.Status == domain.AgentRunRejected {
@@ -386,8 +384,8 @@ func truncate(s string, max int) string {
 	return s[:max] + "…"
 }
 
-func (e *Engine) appendMessageTrace(trace *domain.Trace, msg protocol.MessageEnvelope, phase string) {
-	action := protocol.TraceAction(msg.MessageType, phase)
+func (e *Engine) appendMessageTrace(trace *domain.Trace, msg domain.MessageEnvelope, phase string) {
+	action := domain.TraceAction(msg.MessageType, phase)
 	node := domain.TraceNode{
 		ID: fmt.Sprintf("m%d", len(trace.Nodes)+1), Agent: domain.AgentName(msg.FromAgent),
 		Label: action, Status: domain.AgentRunCompleted, Output: string(msg.MessageType),

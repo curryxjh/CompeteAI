@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"CompeteAI/internal/bus"
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/repository/dao"
 	"CompeteAI/internal/state"
 	"context"
@@ -87,7 +86,7 @@ func (s *Store) HeartbeatLease(ctx context.Context, taskID string, agent domain.
 }
 
 // Idempotent 检查消息是否已处理（§8.3）。
-func (s *Store) Idempotent(ctx context.Context, msg protocol.MessageEnvelope) (already bool, err error) {
+func (s *Store) Idempotent(ctx context.Context, msg domain.MessageEnvelope) (already bool, err error) {
 	if s.redis == nil {
 		return false, nil
 	}
@@ -115,7 +114,7 @@ func NewRouter(b bus.Bus) *Router {
 	return &Router{bus: b}
 }
 
-func (r *Router) PublishNext(ctx context.Context, env protocol.MessageEnvelope) error {
+func (r *Router) PublishNext(ctx context.Context, env domain.MessageEnvelope) error {
 	topic := topicForEnvelope(env)
 	if topic == "" {
 		return nil
@@ -123,21 +122,21 @@ func (r *Router) PublishNext(ctx context.Context, env protocol.MessageEnvelope) 
 	return r.bus.Publish(ctx, topic, env)
 }
 
-func topicForEnvelope(env protocol.MessageEnvelope) string {
+func topicForEnvelope(env domain.MessageEnvelope) string {
 	switch env.MessageType {
-	case protocol.MsgTaskCreated:
+	case domain.MsgTaskCreated:
 		return bus.TopicAgentCoordinator
-	case protocol.MsgPlanReady:
+	case domain.MsgPlanReady:
 		return bus.TopicAgentCollector
-	case protocol.MsgMaterialsReady:
+	case domain.MsgMaterialsReady:
 		return bus.TopicAgentAnalyst
-	case protocol.MsgAnalysisReady:
+	case domain.MsgAnalysisReady:
 		return bus.TopicAgentWriter
-	case protocol.MsgReportReady:
+	case domain.MsgReportReady:
 		return bus.TopicAgentQA
-	case protocol.MsgQAReject:
+	case domain.MsgQAReject:
 		return bus.TopicAgentCoordinator
-	case protocol.MsgClarificationAnswered:
+	case domain.MsgClarificationAnswered:
 		return bus.TopicAgentCoordinator
 	default:
 		if env.ToAgent != "" {
@@ -147,8 +146,8 @@ func topicForEnvelope(env protocol.MessageEnvelope) string {
 	}
 }
 
-func NewTaskCreateEnvelope(task domain.Task, traceID string) protocol.MessageEnvelope {
-	return protocol.NewTaskCreatedMessage(task, traceID)
+func NewTaskCreateEnvelope(task domain.Task, traceID string) domain.MessageEnvelope {
+	return domain.NewTaskCreatedMessage(task, traceID)
 }
 
 func NewTraceID() string { return uuid.NewString() }

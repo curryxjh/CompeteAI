@@ -1,7 +1,7 @@
 package bus
 
 import (
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/domain"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -45,7 +45,7 @@ func (b *RedisStreamBus) streamKey(topic string) string {
 	return redisStreamPrefix + NormalizeTopic(topic)
 }
 
-func (b *RedisStreamBus) Publish(ctx context.Context, topic string, env protocol.MessageEnvelope) error {
+func (b *RedisStreamBus) Publish(ctx context.Context, topic string, env domain.MessageEnvelope) error {
 	topic = NormalizeTopic(topic)
 	raw, err := json.Marshal(env)
 	if err != nil {
@@ -124,7 +124,7 @@ func (b *RedisStreamBus) consumeLoop(ctx context.Context, topic string) {
 
 func (b *RedisStreamBus) handleEntry(ctx context.Context, topic, stream string, x redis.XMessage) {
 	raw, _ := x.Values["payload"].(string)
-	var env protocol.MessageEnvelope
+	var env domain.MessageEnvelope
 	if err := json.Unmarshal([]byte(raw), &env); err != nil {
 		log.Printf("[bus] bad payload on %s: %v", topic, err)
 		_ = b.redis.XAck(ctx, stream, b.group, x.ID).Err()

@@ -2,7 +2,6 @@ package bus
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"context"
 	"encoding/json"
 	"log"
@@ -59,7 +58,7 @@ func hostname() string {
 }
 
 // PublishDLQ 将超过重试阈值的消息转入死信 topic。
-func PublishDLQ(ctx context.Context, b Bus, agent domain.AgentName, env protocol.MessageEnvelope, reason string) error {
+func PublishDLQ(ctx context.Context, b Bus, agent domain.AgentName, env domain.MessageEnvelope, reason string) error {
 	meta := map[string]any{"dlq_reason": reason, "original_topic": env.MessageType}
 	raw, _ := json.Marshal(meta)
 	env.Metadata = meta

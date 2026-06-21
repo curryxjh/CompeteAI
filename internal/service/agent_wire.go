@@ -2,9 +2,9 @@ package service
 
 import (
 	"CompeteAI/internal/agent"
-	"CompeteAI/internal/eino"
-	"CompeteAI/internal/eventlog"
-	"CompeteAI/internal/kafka"
+	"CompeteAI/internal/llm"
+	"CompeteAI/internal/event"
+	"CompeteAI/internal/bus"
 	"CompeteAI/internal/memory"
 	"CompeteAI/internal/repository"
 	"CompeteAI/internal/workflow"
@@ -14,7 +14,7 @@ import (
 )
 
 // NewAgentRegistry 构建 5 Agent 注册表。
-func NewAgentRegistry(chat *eino.ChatService, tools *eino.ToolRegistry) *agent.Registry {
+func NewAgentRegistry(chat *llm.ChatService, tools *llm.ToolRegistry) *agent.Registry {
 	return agent.NewRegistry(agent.Deps{
 		Chat:  agent.NewEinoChatAdapter(chat),
 		Tools: agent.NewEinoToolAdapter(tools),
@@ -27,9 +27,9 @@ func NewWorkflowEngine(
 	tasks repository.TaskRepository,
 	reports repository.ReportRepository,
 	traces repository.TraceRepository,
-	hub *eventlog.HybridHub,
-	bus kafka.Bus,
-	router *kafka.Router,
+	hub *event.HybridHub,
+	bus bus.Bus,
+	router *bus.Router,
 	redisClient redis.Cmdable,
 	mem memory.MemoryService,
 ) *workflow.Engine {

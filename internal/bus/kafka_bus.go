@@ -1,7 +1,7 @@
 package bus
 
 import (
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/domain"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,7 +34,7 @@ func NewKafkaBus(brokers []string, groupID string) *KafkaBus {
 	}
 }
 
-func (b *KafkaBus) Publish(ctx context.Context, topic string, env protocol.MessageEnvelope) error {
+func (b *KafkaBus) Publish(ctx context.Context, topic string, env domain.MessageEnvelope) error {
 	topic = NormalizeTopic(topic)
 	raw, err := json.Marshal(env)
 	if err != nil {
@@ -99,7 +99,7 @@ func (b *KafkaBus) consumeLoop(ctx context.Context, topic string, reader *kafka.
 			time.Sleep(time.Second)
 			continue
 		}
-		var env protocol.MessageEnvelope
+		var env domain.MessageEnvelope
 		if err := json.Unmarshal(m.Value, &env); err != nil {
 			_ = reader.CommitMessages(ctx, m)
 			continue

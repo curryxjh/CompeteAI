@@ -3,7 +3,6 @@ package repository
 import (
 	"CompeteAI/internal/bus"
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/repository/dao"
 	"context"
 	"encoding/json"
@@ -21,7 +20,7 @@ func CreateTaskWithOutbox(ctx context.Context, db *gorm.DB, task domain.Task, tr
 	if err != nil {
 		return err
 	}
-	msg := protocol.NewTaskCreatedMessage(task, traceID).WithStatus(protocol.MessageStatusPending)
+	msg := domain.NewTaskCreatedMessage(task, traceID).WithStatus(domain.MessageStatusPending)
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		return err

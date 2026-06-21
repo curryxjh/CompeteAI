@@ -1,12 +1,12 @@
-package eino
+package llm
 
 import (
-	"CompeteAI/internal/llm"
+	"CompeteAI/internal/domain"
 
 	"github.com/cloudwego/eino/schema"
 )
 
-func ToSchemaMessages(msgs []llm.Message) []*schema.Message {
+func ToSchemaMessages(msgs []domain.ChatMessage) []*schema.Message {
 	out := make([]*schema.Message, 0, len(msgs))
 	for _, m := range msgs {
 		out = append(out, &schema.Message{

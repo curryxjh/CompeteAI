@@ -3,13 +3,13 @@ package ioc
 import (
 	"context"
 
-	einosvc "CompeteAI/internal/eino"
+	llmsvc "CompeteAI/internal/llm"
 	"CompeteAI/settings"
 )
 
-func InitChatService(tools *einosvc.ToolRegistry) *einosvc.ChatService {
+func InitChatService(tools *llmsvc.ToolRegistry) *llmsvc.ChatService {
 	ctx := context.Background()
-	chatModel, err := einosvc.NewChatModel(ctx)
+	chatModel, err := llmsvc.NewChatModel(ctx)
 	if err != nil {
 		panic("init eino chat model: " + err.Error())
 	}
@@ -18,5 +18,5 @@ func InitChatService(tools *einosvc.ToolRegistry) *einosvc.ChatService {
 	if cfg := settings.Conf.LLMConfig; cfg != nil {
 		modelName = cfg.Model
 	}
-	return einosvc.NewChatService(chatModel, modelName, tools)
+	return llmsvc.NewChatService(chatModel, modelName, tools)
 }

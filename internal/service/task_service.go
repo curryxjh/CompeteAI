@@ -2,9 +2,8 @@ package service
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/metrics"
+	"CompeteAI/internal/pkg/metrics"
 	"CompeteAI/internal/outbox"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/repository"
 	"CompeteAI/internal/repository/dao"
 	"CompeteAI/internal/workflow"
@@ -149,7 +148,7 @@ func (s *opsService) ReplayDeadLetter(ctx context.Context, id uint) error {
 	if err != nil {
 		return err
 	}
-	var env protocol.MessageEnvelope
+	var env domain.MessageEnvelope
 	if err := json.Unmarshal([]byte(dl.PayloadJSON), &env); err != nil {
 		return err
 	}

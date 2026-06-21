@@ -2,9 +2,8 @@ package workflow
 
 import (
 	"CompeteAI/internal/bus"
-	"CompeteAI/internal/eventlog"
-	"CompeteAI/internal/kafka"
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/event"
+	"CompeteAI/internal/domain"
 	"CompeteAI/internal/state"
 	"context"
 	"testing"
@@ -13,9 +12,9 @@ import (
 func testEngineWithBus() *Engine {
 	b := bus.NewMemoryBus()
 	return &Engine{
-		hub:    eventlog.NewHybridHub(nil),
+		hub:    event.NewHybridHub(nil),
 		bus:    b,
-		router: kafka.NewRouter(b),
+		router: bus.NewRouter(b),
 	}
 }
 
@@ -23,8 +22,8 @@ func TestTryQAQueryLoopDetectsUnsupportedClaim(t *testing.T) {
 	e := testEngineWithBus()
 	store := state.ForTask(state.NewMemoryBlackboard(), "t1")
 	wf := state.WorkflowState{QAQueryAttempts: 0}
-	qa := protocol.QAResultPayload{
-		Issues: []protocol.Issue{{Category: protocol.IssueUnsupportedClaim, Problem: "摘要无来源"}},
+	qa := domain.QAResultPayload{
+		Issues: []domain.Issue{{Category: domain.IssueUnsupportedClaim, Problem: "摘要无来源"}},
 	}
 	if !e.tryQAQueryLoop(context.Background(), "t1", "tr1", store, wf, qa) {
 		t.Fatal("expected qa query loop on unsupported claim")
@@ -38,8 +37,8 @@ func TestTryQAQueryLoopDetectsUnsupportedClaim(t *testing.T) {
 func TestTryQAQueryLoopSkipsOtherIssues(t *testing.T) {
 	e := testEngineWithBus()
 	store := state.ForTask(state.NewMemoryBlackboard(), "t1")
-	qa := protocol.QAResultPayload{
-		Issues: []protocol.Issue{{Category: protocol.IssueSourceMissing}},
+	qa := domain.QAResultPayload{
+		Issues: []domain.Issue{{Category: domain.IssueSourceMissing}},
 	}
 	if e.tryQAQueryLoop(context.Background(), "t1", "tr1", store, state.WorkflowState{}, qa) {
 		t.Fatal("should not query for source_missing only")

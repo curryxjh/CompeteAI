@@ -3,7 +3,6 @@ package outbox
 import (
 	"CompeteAI/internal/bus"
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/repository/dao"
 	"context"
 	"encoding/json"
@@ -25,7 +24,7 @@ func NewPublisher(dao *dao.OutboxDao, b bus.Bus) *Publisher {
 
 // EnqueueTaskCreated 仅写 outbox，不直接 Publish。
 func (p *Publisher) EnqueueTaskCreated(ctx context.Context, task domain.Task, traceID string) error {
-	msg := protocol.NewTaskCreatedMessage(task, traceID).WithStatus(protocol.MessageStatusPending)
+	msg := domain.NewTaskCreatedMessage(task, traceID).WithStatus(domain.MessageStatusPending)
 	raw, _ := json.Marshal(msg)
 	return p.dao.Enqueue(ctx, dao.OutboxMessageEntity{
 		TaskID: task.ID, MessageID: msg.MessageID,
@@ -34,7 +33,7 @@ func (p *Publisher) EnqueueTaskCreated(ctx context.Context, task domain.Task, tr
 }
 
 // EnqueueRaw 通用 outbox 入队。
-func (p *Publisher) EnqueueRaw(ctx context.Context, topic string, env protocol.MessageEnvelope) error {
+func (p *Publisher) EnqueueRaw(ctx context.Context, topic string, env domain.MessageEnvelope) error {
 	raw, _ := json.Marshal(env)
 	return p.dao.Enqueue(ctx, dao.OutboxMessageEntity{
 		TaskID: env.TaskID, MessageID: env.MessageID,
@@ -62,7 +61,7 @@ func (p *Publisher) flush(ctx context.Context) {
 		return
 	}
 	for _, row := range rows {
-		var env protocol.MessageEnvelope
+		var env domain.MessageEnvelope
 		if json.Unmarshal([]byte(row.PayloadJSON), &env) != nil {
 			continue
 		}

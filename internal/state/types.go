@@ -178,7 +178,7 @@ type QARecord struct {
 	Versioned
 }
 
-// Issue 与 protocol.Issue 对齐的 Blackboard 问题结构。
+// Issue 与 domain.Issue 对齐的 Blackboard 问题结构。
 type Issue struct {
 	ID         string `json:"id"`
 	Category   string `json:"category"`

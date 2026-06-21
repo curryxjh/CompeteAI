@@ -2,7 +2,6 @@ package agent
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/state"
 	"context"
 	"fmt"
@@ -32,16 +31,17 @@ func (a *Writer) Card() AgentCard {
 	}
 }
 
-func (a *Writer) Run(ctx context.Context, input RunInput, bb state.Blackboard) (RunOutput, error) {
-	store := state.ForTask(bb, input.TaskID)
+func (a *Writer) Run(ctx context.Context, input domain.RunInput, bb any) (domain.RunOutput, error) {
+	blackboard := bb.(state.Blackboard)
+	store := state.ForTask(blackboard, input.TaskID)
 
 	meta, err := store.LoadTaskMeta(ctx)
 	if err != nil {
-		return RunOutput{}, &protocol.AgentError{Kind: protocol.ErrorKindFatal, Message: "task meta not found"}
+		return domain.RunOutput{}, &domain.AgentError{Kind: domain.ErrorKindFatal, Message: "task meta not found"}
 	}
 	analysis, err := store.LoadAnalysisOutput(ctx)
 	if err != nil {
-		return RunOutput{}, &protocol.AgentError{Kind: protocol.ErrorKindFatal, Message: "analysis result not found"}
+		return domain.RunOutput{}, &domain.AgentError{Kind: domain.ErrorKindFatal, Message: "analysis result not found"}
 	}
 	coll, _ := store.LoadCollectorOutput(ctx)
 
@@ -84,13 +84,13 @@ func (a *Writer) Run(ctx context.Context, input RunInput, bb state.Blackboard) (
 		report.Summary = summary
 		report.GeneratedAt = state.NowRFC3339()
 		if err := store.SaveReportFinal(ctx, report); err != nil {
-			return RunOutput{}, err
+			return domain.RunOutput{}, err
 		}
 		EmitProgress(ctx, "note", "执行摘要已局部更新", "done")
-		return RunOutput{
+		return domain.RunOutput{
 			Status: domain.AgentRunCompleted, NextAgent: ptrAgent(domain.AgentQA),
-			MessageType: string(protocol.MsgReportReady),
-			Payload:     protocol.ReportPayload{Title: title, Summary: report.Summary, SourceCount: len(report.Sources)},
+			MessageType: string(domain.MsgReportReady),
+			Payload:     domain.ReportPayload{Title: title, Summary: report.Summary, SourceCount: len(report.Sources)},
 			Summary:     "报告摘要已局部重写",
 		}, nil
 	}
@@ -99,7 +99,7 @@ func (a *Writer) Run(ctx context.Context, input RunInput, bb state.Blackboard) (
 	if err := store.SaveReportDraft(ctx, state.ReportDraft{
 		Title: title, Summary: summary, Sections: sections, SourceIDs: sourceIDs,
 	}); err != nil {
-		return RunOutput{}, err
+		return domain.RunOutput{}, err
 	}
 	savedDraft, _ := store.LoadReportDraft(ctx)
 
@@ -119,23 +119,23 @@ func (a *Writer) Run(ctx context.Context, input RunInput, bb state.Blackboard) (
 	}
 
 	if err := store.SaveReportFinal(ctx, report); err != nil {
-		return RunOutput{}, err
+		return domain.RunOutput{}, err
 	}
 	reportMeta, _ := store.LoadReportMeta(ctx)
 
-	reportPayload := protocol.ReportPayload{
+	reportPayload := domain.ReportPayload{
 		Title: title, Summary: summary, SourceCount: len(report.Sources),
 	}
 
 	EmitProgress(ctx, "note", fmt.Sprintf("报告已生成，共 %d 个章节、%d 条来源", len(sections), len(report.Sources)), "done")
 
-	return RunOutput{
+	return domain.RunOutput{
 		Status: domain.AgentRunCompleted, NextAgent: ptrAgent(domain.AgentQA),
-		MessageType: string(protocol.MsgReportReady), Payload: reportPayload,
+		MessageType: string(domain.MsgReportReady), Payload: reportPayload,
 		Summary: "报告草稿已生成",
-		Artifacts: []protocol.ArtifactRef{
-			protocol.NewArtifactRef(protocol.ArtifactReportDraft, state.ReportDraftKey(input.TaskID), savedDraft.Version),
-			protocol.NewArtifactRef(protocol.ArtifactReportFinal, state.ReportFinalKey(input.TaskID), reportMeta.Version),
+		Artifacts: []domain.ArtifactRef{
+			domain.NewArtifactRef(domain.ArtifactReportDraft, state.ReportDraftKey(input.TaskID), savedDraft.Version),
+			domain.NewArtifactRef(domain.ArtifactReportFinal, state.ReportFinalKey(input.TaskID), reportMeta.Version),
 		},
 	}, nil
 }

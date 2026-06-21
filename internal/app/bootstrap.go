@@ -2,9 +2,7 @@ package app
 
 import (
 	"CompeteAI/internal/bus"
-	"CompeteAI/internal/dlq"
-	"CompeteAI/internal/eventlog"
-	"CompeteAI/internal/kafka"
+	"CompeteAI/internal/event"
 	"CompeteAI/internal/memory"
 	"CompeteAI/internal/orchestrator"
 	"CompeteAI/internal/outbox"
@@ -31,7 +29,7 @@ type SharedDeps struct {
 	Bus       bus.Bus
 	Engine    *workflow.Engine
 	Runtime   *orchestrator.Runtime
-	Events    *eventlog.Publisher
+	Events    *event.Publisher
 	Tasks     repository.TaskRepository
 	Store     *orchestrator.Store
 	Outbox    *outbox.Publisher
@@ -59,7 +57,7 @@ func BuildSharedDeps(consumerID string) (*SharedDeps, error) {
 	toolRegistry := ioc.InitFirecrawlTools()
 	chatService := ioc.InitChatService(toolRegistry)
 	registry := service.NewAgentRegistry(chatService, toolRegistry)
-	hub := eventlog.NewHybridHub(dao.NewEventLogDao(db))
+	hub := event.NewHybridHub(dao.NewEventLogDao(db))
 
 	var messageBus bus.Bus
 	if consumerID != "" {
@@ -67,7 +65,7 @@ func BuildSharedDeps(consumerID string) (*SharedDeps, error) {
 	} else {
 		messageBus = bus.InitPublisher(redisClient)
 	}
-	router := kafka.NewRouter(messageBus)
+	router := bus.NewRouter(messageBus)
 
 	useRedis := true
 	maxRetry, maxRounds := 3, 0
@@ -82,9 +80,9 @@ func BuildSharedDeps(consumerID string) (*SharedDeps, error) {
 	engine := workflow.NewEngine(registry, tasks, reports, traces, hub, messageBus, router, redisClient, useRedis, maxRetry, maxRounds, memSvc)
 
 
-	eventsPub := eventlog.NewPublisher(eventDao)
+	eventsPub := event.NewPublisher(eventDao)
 	store := orchestrator.NewStore(cpDao, redisClient)
-	dlqHandler := dlq.NewHandler(dlqDao, messageBus)
+	dlqHandler := bus.NewDLQHandler(dlqDao, messageBus)
 	outboxPub := outbox.NewPublisher(outboxDao, messageBus)
 	runtime := orchestrator.NewRuntime(orchestrator.Config{
 		Engine: engine, Bus: messageBus, Store: store,

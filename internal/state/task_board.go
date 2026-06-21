@@ -2,7 +2,7 @@ package state
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
+	
 	"context"
 	"fmt"
 	"strings"
@@ -60,8 +60,12 @@ type taskStore struct {
 }
 
 // ForTask 绑定任务 ID 的语义化 Store。
-func ForTask(bb Blackboard, taskID string) TaskStore {
-	return &taskStore{taskID: taskID, bb: bb}
+func ForTask(bb any, taskID string) TaskStore {
+	blackboard, ok := bb.(Blackboard)
+	if !ok {
+		return &taskStore{bb: NewMemoryBlackboard(), taskID: taskID}
+	}
+	return &taskStore{bb: blackboard, taskID: taskID}
 }
 
 func (s *taskStore) SaveTaskMeta(ctx context.Context, meta TaskMeta) error {
@@ -349,7 +353,7 @@ func (s *taskStore) ListKeys(ctx context.Context) ([]string, error) {
 }
 
 // IssuesToStrings 将 protocol Issue 转为摘要字符串列表。
-func IssuesToStrings(issues []protocol.Issue) []string {
+func IssuesToStrings(issues []domain.Issue) []string {
 	out := make([]string, 0, len(issues))
 	for _, iss := range issues {
 		out = append(out, fmt.Sprintf("[%s] %s: %s", iss.Category, iss.Location, iss.Problem))
@@ -357,8 +361,8 @@ func IssuesToStrings(issues []protocol.Issue) []string {
 	return out
 }
 
-// IssuesFromProtocol 转换 protocol.Issue 到 state.Issue。
-func IssuesFromProtocol(issues []protocol.Issue) []Issue {
+// IssuesFromProtocol 转换 domain.Issue 到 state.Issue。
+func IssuesFromProtocol(issues []domain.Issue) []Issue {
 	out := make([]Issue, len(issues))
 	for i, iss := range issues {
 		out[i] = Issue{
@@ -369,8 +373,8 @@ func IssuesFromProtocol(issues []protocol.Issue) []Issue {
 	return out
 }
 
-// QARecordFromProtocol 从 protocol.QAResult 构建 Blackboard QARecord。
-func QARecordFromProtocol(qa protocol.QAResult) QARecord {
+// QARecordFromProtocol 从 domain.QAResult 构建 Blackboard QARecord。
+func QARecordFromProtocol(qa domain.QAResult) QARecord {
 	return QARecord{
 		Score:       qa.Score,
 		Result:      qa.Result,

@@ -2,7 +2,7 @@ package workflow
 
 import (
 	"CompeteAI/internal/bus"
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/domain"
 	"context"
 )
 
@@ -18,7 +18,7 @@ func RegisterWorkers(e *Engine) {
 }
 
 // HandleDelivery Worker 消费消息后调用（API 不得调用）。
-func (e *Engine) HandleDelivery(ctx context.Context, topic string, msg protocol.MessageEnvelope) error {
+func (e *Engine) HandleDelivery(ctx context.Context, topic string, msg domain.MessageEnvelope) error {
 	return e.withIdempotent(ctx, msg, func() error {
 		topic = bus.NormalizeTopic(topic)
 		switch topic {

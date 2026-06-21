@@ -1,4 +1,4 @@
-package eino
+package llm
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"CompeteAI/internal/llm"
+	"CompeteAI/internal/domain"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -38,7 +38,7 @@ func (s *ChatService) ToolsEnabled() bool {
 	return s.tools != nil && s.tools.Enabled()
 }
 
-func (s *ChatService) Chat(ctx context.Context, messages []llm.Message) (string, error) {
+func (s *ChatService) Chat(ctx context.Context, messages []domain.ChatMessage) (string, error) {
 	var content string
 	err := s.StreamChat(ctx, messages, func(ev StreamEvent) error {
 		if ev.Type == StreamEventContent {
@@ -55,7 +55,7 @@ func (s *ChatService) Chat(ctx context.Context, messages []llm.Message) (string,
 	return content, nil
 }
 
-func (s *ChatService) StreamChat(ctx context.Context, messages []llm.Message, onEvent func(StreamEvent) error) error {
+func (s *ChatService) StreamChat(ctx context.Context, messages []domain.ChatMessage, onEvent func(StreamEvent) error) error {
 	if s.ToolsEnabled() {
 		return s.generateWithEvents(ctx, ToSchemaMessages(messages), onEvent)
 	}

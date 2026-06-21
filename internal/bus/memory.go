@@ -1,7 +1,7 @@
 package bus
 
 import (
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/domain"
 	"context"
 	"sync"
 	"time"
@@ -22,7 +22,7 @@ func NewMemoryBus() *MemoryBus {
 	}
 }
 
-func (b *MemoryBus) Publish(_ context.Context, topic string, env protocol.MessageEnvelope) error {
+func (b *MemoryBus) Publish(_ context.Context, topic string, env domain.MessageEnvelope) error {
 	topic = NormalizeTopic(topic)
 	b.mu.Lock()
 	defer b.mu.Unlock()

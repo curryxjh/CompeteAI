@@ -2,8 +2,7 @@ package agent
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/eino"
-	"CompeteAI/internal/protocol"
+	"CompeteAI/internal/llm"
 	"CompeteAI/internal/state"
 	"context"
 	"fmt"
@@ -34,12 +33,13 @@ func (a *Collector) Card() AgentCard {
 	}
 }
 
-func (a *Collector) Run(ctx context.Context, input RunInput, bb state.Blackboard) (RunOutput, error) {
-	store := state.ForTask(bb, input.TaskID)
+func (a *Collector) Run(ctx context.Context, input domain.RunInput, bb any) (domain.RunOutput, error) {
+	blackboard := bb.(state.Blackboard)
+	store := state.ForTask(blackboard, input.TaskID)
 
 	meta, err := store.LoadTaskMeta(ctx)
 	if err != nil {
-		return RunOutput{}, &protocol.AgentError{Kind: protocol.ErrorKindFatal, Message: "task meta not found"}
+		return domain.RunOutput{}, &domain.AgentError{Kind: domain.ErrorKindFatal, Message: "task meta not found"}
 	}
 
 	query := strings.Join(meta.Competitors, " vs ") + " 竞品对比 功能 定价 SWOT 2025"
@@ -62,7 +62,7 @@ func (a *Collector) Run(ctx context.Context, input RunInput, bb state.Blackboard
 			urls = extractSearchURLs(raw)
 			phases = append(phases, "Search")
 			materials.WriteString("## Search\n")
-			materials.WriteString(eino.FormatToolResultForUI("firecrawl_search", raw))
+			materials.WriteString(llm.FormatToolResultForUI("firecrawl_search", raw))
 			materials.WriteString("\n\n")
 		}
 	} else {
@@ -81,7 +81,7 @@ func (a *Collector) Run(ctx context.Context, input RunInput, bb state.Blackboard
 		if err != nil {
 			continue
 		}
-		text := eino.FormatToolResultForUI("firecrawl_scrape", scrapeRaw)
+		text := llm.FormatToolResultForUI("firecrawl_scrape", scrapeRaw)
 		materials.WriteString(fmt.Sprintf("## Fetch/Extract %d\n%s\n\n", i+1, text))
 		sid := fmt.Sprintf("s%d", i+1)
 		sources[sid] = domain.SourceRef{
@@ -116,7 +116,7 @@ func (a *Collector) Run(ctx context.Context, input RunInput, bb state.Blackboard
 		Summary:   fmt.Sprintf("采集 %d 个来源，阶段: %s", len(sources), strings.Join(phases, "→")),
 	}
 	if err := store.SaveCollectorOutput(ctx, out); err != nil {
-		return RunOutput{}, err
+		return domain.RunOutput{}, err
 	}
 	saved, _ := store.LoadCollectorOutput(ctx)
 
@@ -125,22 +125,22 @@ func (a *Collector) Run(ctx context.Context, input RunInput, bb state.Blackboard
 		sourceIDs = append(sourceIDs, id)
 	}
 
-	materialsPayload := protocol.MaterialsPayload{
+	materialsPayload := domain.MaterialsPayload{
 		Query:       query,
 		SourceCount: len(sources),
 		SourceIDs:   sourceIDs,
 		Summary:     out.Summary,
 	}
 
-	return RunOutput{
+	return domain.RunOutput{
 		Status:      domain.AgentRunCompleted,
 		NextAgent:   ptrAgent(domain.AgentAnalyst),
-		MessageType: string(protocol.MsgMaterialsReady),
+		MessageType: string(domain.MsgMaterialsReady),
 		Payload:     materialsPayload,
 		Summary:     out.Summary,
-		Artifacts: []protocol.ArtifactRef{
-			protocol.NewArtifactRef(protocol.ArtifactSourceRef, state.CollectorSourcesKey(input.TaskID), saved.Version),
-			protocol.NewArtifactRef(protocol.ArtifactCollectedMaterial, state.CollectorMaterialsKey(input.TaskID), saved.Version),
+		Artifacts: []domain.ArtifactRef{
+			domain.NewArtifactRef(domain.ArtifactSourceRef, state.CollectorSourcesKey(input.TaskID), saved.Version),
+			domain.NewArtifactRef(domain.ArtifactCollectedMaterial, state.CollectorMaterialsKey(input.TaskID), saved.Version),
 		},
 		Metadata: map[string]any{"phases": phases, "source_count": len(sources)},
 	}, nil

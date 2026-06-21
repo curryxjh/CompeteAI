@@ -1,12 +1,12 @@
 package ioc
 
 import (
-	"CompeteAI/internal/eventlog"
+	"CompeteAI/internal/event"
 	"CompeteAI/internal/repository/dao"
 
 	"gorm.io/gorm"
 )
 
-func InitEventHub(db *gorm.DB) *eventlog.HybridHub {
-	return eventlog.NewHybridHub(dao.NewEventLogDao(db))
+func InitEventHub(db *gorm.DB) *event.HybridHub {
+	return event.NewHybridHub(dao.NewEventLogDao(db))
 }

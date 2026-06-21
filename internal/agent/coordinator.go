@@ -2,7 +2,6 @@ package agent
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/state"
 	"context"
 	"fmt"
@@ -28,35 +27,36 @@ func (a *Coordinator) Card() AgentCard {
 	}
 }
 
-func (a *Coordinator) Run(ctx context.Context, input RunInput, bb state.Blackboard) (RunOutput, error) {
-	store := state.ForTask(bb, input.TaskID)
+func (a *Coordinator) Run(ctx context.Context, input domain.RunInput, bb any) (domain.RunOutput, error) {
+	blackboard := bb.(state.Blackboard)
+	store := state.ForTask(blackboard, input.TaskID)
 
 	meta, err := store.LoadTaskMeta(ctx)
 	if err != nil {
-		return RunOutput{}, &protocol.AgentError{Kind: protocol.ErrorKindFatal, Message: "task meta not found"}
+		return domain.RunOutput{}, &domain.AgentError{Kind: domain.ErrorKindFatal, Message: "task meta not found"}
 	}
 
 	wf, _ := store.LoadWorkflowState(ctx)
 	planNotes := ""
 
 	if len(meta.Competitors) < 1 {
-		clarify := protocol.ClarificationPayload{Question: "请提供至少一个竞品名称"}
-		return RunOutput{
+		clarify := domain.ClarificationPayload{Question: "请提供至少一个竞品名称"}
+		return domain.RunOutput{
 			Status:      domain.AgentRunFailed,
-			MessageType: string(protocol.MsgClarificationRequired),
+			MessageType: string(domain.MsgClarificationRequired),
 			Payload:     clarify,
 			Summary:     clarify.Question,
-		}, &protocol.AgentError{
-			Kind:    protocol.ErrorKindClarificationRequired,
+		}, &domain.AgentError{
+			Kind:    domain.ErrorKindClarificationRequired,
 			Message: clarify.Question,
 		}
 	}
 
-	if input.TriggerType == protocol.TriggerClarificationAnswered {
+	if input.TriggerType == domain.TriggerClarificationAnswered {
 		var ans state.ClarificationAnswer
-		_ = bb.Get(ctx, state.ClarificationAnswerKey(input.TaskID), &ans)
+		_ = blackboard.Get(ctx, state.ClarificationAnswerKey(input.TaskID), &ans)
 		var question state.ClarificationQuestion
-		_ = bb.Get(ctx, state.ClarificationQuestionKey(input.TaskID), &question)
+		_ = blackboard.Get(ctx, state.ClarificationQuestionKey(input.TaskID), &question)
 		meta = state.MergeClarificationIntoMeta(meta, ans, question)
 		_ = store.SaveTaskMeta(ctx, meta)
 		wf.ClarificationResolved = true
@@ -65,14 +65,14 @@ func (a *Coordinator) Run(ctx context.Context, input RunInput, bb state.Blackboa
 	}
 
 	if len(meta.Competitors) < 1 {
-		clarify := protocol.ClarificationPayload{Question: "澄清后仍缺少竞品信息，请补充具体竞品名称"}
-		return RunOutput{
+		clarify := domain.ClarificationPayload{Question: "澄清后仍缺少竞品信息，请补充具体竞品名称"}
+		return domain.RunOutput{
 			Status:      domain.AgentRunFailed,
-			MessageType: string(protocol.MsgClarificationRequired),
+			MessageType: string(domain.MsgClarificationRequired),
 			Payload:     clarify,
 			Summary:     clarify.Question,
-		}, &protocol.AgentError{
-			Kind:    protocol.ErrorKindClarificationRequired,
+		}, &domain.AgentError{
+			Kind:    domain.ErrorKindClarificationRequired,
 			Message: clarify.Question,
 		}
 	}
@@ -85,7 +85,7 @@ func (a *Coordinator) Run(ctx context.Context, input RunInput, bb state.Blackboa
 	}
 
 	deliverables := []string{"SWOT 分析", "功能矩阵", "定价对比", "用户画像", "综合报告"}
-	planPayload := protocol.PlanPayload{
+	planPayload := domain.PlanPayload{
 		Summary:      planSummary,
 		Competitors:  meta.Competitors,
 		Dimensions:   meta.Dimensions,
@@ -106,7 +106,7 @@ func (a *Coordinator) Run(ctx context.Context, input RunInput, bb state.Blackboa
 	EmitProgress(ctx, "note", planSummary, "done")
 	EmitProgress(ctx, "note", "交付物："+strings.Join(deliverables, "、"), "done")
 
-	if input.TriggerType == protocol.TriggerQAReject {
+	if input.TriggerType == domain.TriggerQAReject {
 		rework, rerr := store.LoadWorkflowRework(ctx)
 		if rerr == nil && rework.TargetAgent != "" {
 			next = domain.AgentName(rework.TargetAgent)
@@ -128,14 +128,14 @@ func (a *Coordinator) Run(ctx context.Context, input RunInput, bb state.Blackboa
 	_ = store.SaveWorkflowState(ctx, wf)
 
 	plan, _ := store.LoadWorkflowPlan(ctx)
-	planArtifact := protocol.NewArtifactRef(protocol.ArtifactPlan, state.WorkflowPlanKey(input.TaskID), plan.Version)
+	planArtifact := domain.NewArtifactRef(domain.ArtifactPlan, state.WorkflowPlanKey(input.TaskID), plan.Version)
 
-	return RunOutput{
+	return domain.RunOutput{
 		Status:      domain.AgentRunCompleted,
 		NextAgent:   ptrAgent(next),
-		MessageType: string(protocol.MsgPlanReady),
+		MessageType: string(domain.MsgPlanReady),
 		Payload:     planPayload,
 		Summary:     summary,
-		Artifacts:   []protocol.ArtifactRef{planArtifact},
+		Artifacts:   []domain.ArtifactRef{planArtifact},
 	}, nil
 }

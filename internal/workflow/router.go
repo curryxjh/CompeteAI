@@ -2,15 +2,14 @@ package workflow
 
 import (
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/state"
 )
 
 // RouteInput Router 输入（§11）。
 type RouteInput struct {
-	MessageType protocol.MessageType
+	MessageType domain.MessageType
 	FromAgent   domain.AgentName
-	QA          *protocol.QAResultPayload
+	QA          *domain.QAResultPayload
 	Workflow    state.WorkflowState
 }
 
@@ -26,21 +25,21 @@ type RouteOutput struct {
 // Route 根据消息与工作流状态决定下一跳（§12）。
 func Route(in RouteInput) RouteOutput {
 	switch in.MessageType {
-	case protocol.MsgQAPass:
+	case domain.MsgQAPass:
 		return RouteOutput{
 			TaskStatus: domain.TaskStatusCompleted,
 			Done:       true,
 		}
-	case protocol.MsgQAReject:
+	case domain.MsgQAReject:
 		return RouteQAReject(in.QA, in.Workflow)
-	case protocol.MsgClarificationRequired:
+	case domain.MsgClarificationRequired:
 		return RouteOutput{TaskStatus: domain.TaskStatusClarifying}
-	case protocol.MsgClarificationAnswered:
+	case domain.MsgClarificationAnswered:
 		return RouteOutput{
 			NextAgent:  domain.AgentCoordinator,
 			TaskStatus: domain.TaskStatusRunning,
 		}
-	case protocol.MsgTaskFailed:
+	case domain.MsgTaskFailed:
 		return RouteOutput{
 			TaskStatus: domain.TaskStatusFailed,
 			Failed:     true,
@@ -58,7 +57,7 @@ func Route(in RouteInput) RouteOutput {
 }
 
 // RouteQAReject QA 打回路由（§12.2）。
-func RouteQAReject(qa *protocol.QAResultPayload, wf state.WorkflowState) RouteOutput {
+func RouteQAReject(qa *domain.QAResultPayload, wf state.WorkflowState) RouteOutput {
 	if qa == nil {
 		return RouteOutput{
 			NextAgent:  domain.AgentCoordinator,
@@ -90,17 +89,17 @@ func RouteQAReject(qa *protocol.QAResultPayload, wf state.WorkflowState) RouteOu
 }
 
 // TargetAgentForIssues §9 QA 打回规则表：按问题类别路由到单一目标 Agent。
-func TargetAgentForIssues(issues []protocol.Issue) domain.AgentName {
+func TargetAgentForIssues(issues []domain.Issue) domain.AgentName {
 	priority := []struct {
 		category string
 		agent    domain.AgentName
 	}{
-		{protocol.IssueSourceMissing, domain.AgentCollector},
-		{protocol.IssueMissingSourceRef, domain.AgentAnalyst},
-		{protocol.IssueAnalysisIncomplete, domain.AgentAnalyst},
-		{protocol.IssuePricingMissing, domain.AgentAnalyst},
-		{protocol.IssueUnsupportedClaim, domain.AgentAnalyst},
-		{protocol.IssueReportStructure, domain.AgentWriter},
+		{domain.IssueSourceMissing, domain.AgentCollector},
+		{domain.IssueMissingSourceRef, domain.AgentAnalyst},
+		{domain.IssueAnalysisIncomplete, domain.AgentAnalyst},
+		{domain.IssuePricingMissing, domain.AgentAnalyst},
+		{domain.IssueUnsupportedClaim, domain.AgentAnalyst},
+		{domain.IssueReportStructure, domain.AgentWriter},
 	}
 	for _, p := range priority {
 		for _, iss := range issues {
@@ -113,7 +112,7 @@ func TargetAgentForIssues(issues []protocol.Issue) domain.AgentName {
 }
 
 // ReworkTargetFromQA 解析 QA 打回目标 Agent。
-func ReworkTargetFromQA(qa protocol.QAResultPayload) domain.AgentName {
+func ReworkTargetFromQA(qa domain.QAResultPayload) domain.AgentName {
 	if qa.TargetAgent != "" {
 		return domain.AgentName(qa.TargetAgent)
 	}

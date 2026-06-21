@@ -4,16 +4,16 @@ import (
 	"context"
 	"net/http"
 
-	einosvc "CompeteAI/internal/eino"
+	llmsvc "CompeteAI/internal/llm"
 
 	"github.com/gin-gonic/gin"
 )
 
 type MCPHandler struct {
-	tools *einosvc.ToolRegistry
+	tools *llmsvc.ToolRegistry
 }
 
-func NewMCPHandler(tools *einosvc.ToolRegistry) *MCPHandler {
+func NewMCPHandler(tools *llmsvc.ToolRegistry) *MCPHandler {
 	return &MCPHandler{tools: tools}
 }
 

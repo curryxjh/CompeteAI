@@ -1,7 +1,7 @@
 package ioc
 
 import (
-	"CompeteAI/internal/metrics"
+	"CompeteAI/internal/pkg/metrics"
 	"CompeteAI/internal/memory"
 	"CompeteAI/internal/outbox"
 	"CompeteAI/internal/pkg/ginx/middleware/ratelimit"

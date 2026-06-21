@@ -4,7 +4,6 @@ import (
 	"CompeteAI/internal/agent"
 	"CompeteAI/internal/bus"
 	"CompeteAI/internal/domain"
-	"CompeteAI/internal/protocol"
 	"CompeteAI/internal/state"
 	"context"
 	"errors"
@@ -60,7 +59,7 @@ func (e *Engine) clearCancelled(ctx context.Context, taskID string) {
 	_ = e.redis.Del(ctx, taskCancelKey(taskID)).Err()
 }
 
-func (e *Engine) withIdempotent(ctx context.Context, msg protocol.MessageEnvelope, fn func() error) error {
+func (e *Engine) withIdempotent(ctx context.Context, msg domain.MessageEnvelope, fn func() error) error {
 	if e.redis != nil && msg.MessageID != "" {
 		ok, err := e.redis.SetNX(ctx, bus.DedupKey(msg.MessageID), "1", 24*time.Hour).Result()
 		if err == nil && !ok {
@@ -103,8 +102,8 @@ func (e *Engine) TraceIDForTask(ctx context.Context, taskID string) string {
 }
 
 // ProcessClarification 消费 clarify 命令（Worker）。
-func (e *Engine) ProcessClarification(ctx context.Context, msg protocol.MessageEnvelope) error {
-	var payload protocol.ClarificationPayload
+func (e *Engine) ProcessClarification(ctx context.Context, msg domain.MessageEnvelope) error {
+	var payload domain.ClarificationPayload
 	if err := msg.DecodePayload(&payload); err != nil {
 		return err
 	}
@@ -139,12 +138,12 @@ func (e *Engine) applyClarification(ctx context.Context, taskID, answer string) 
 	task, _ := e.tasks.Get(ctx, taskID)
 	_ = e.transitionTask(ctx, store, taskID, task.Status, domain.TaskStatusRunning, task.Progress, "")
 	e.emitTaskStatus(taskID, domain.TaskStatusRunning, task.Progress)
-	next := protocol.NewEnvelope(
+	next := domain.NewEnvelope(
 		taskID, wf.TraceID, "user", string(domain.AgentCoordinator),
-		protocol.MsgClarificationAnswered,
-		protocol.ClarificationPayload{Answer: answer},
-	).WithStatus(protocol.MessageStatusCompleted)
-	return e.forwardToAgent(ctx, domain.AgentCoordinator, next, protocol.TriggerClarificationAnswered)
+		domain.MsgClarificationAnswered,
+		domain.ClarificationPayload{Answer: answer},
+	).WithStatus(domain.MessageStatusCompleted)
+	return e.forwardToAgent(ctx, domain.AgentCoordinator, next, domain.TriggerClarificationAnswered)
 }
 
 // EnqueueTask 兼容：Prepare + 直接 Publish（Worker/Recovery 内部用）。
@@ -157,7 +156,7 @@ func (e *Engine) EnqueueTask(ctx context.Context, task domain.Task) error {
 	return e.router.PublishTaskCreated(ctx, task, traceID)
 }
 
-func (e *Engine) handleTaskCreated(ctx context.Context, msg protocol.MessageEnvelope) error {
+func (e *Engine) handleTaskCreated(ctx context.Context, msg domain.MessageEnvelope) error {
 	if e.isCancelled(ctx, msg.TaskID) {
 		return nil
 	}
@@ -182,7 +181,7 @@ func (e *Engine) handleTaskCreated(ctx context.Context, msg protocol.MessageEnve
 	return e.handleAgentInput(ctx, domain.AgentCoordinator, msg)
 }
 
-func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, msg protocol.MessageEnvelope) error {
+func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, msg domain.MessageEnvelope) error {
 	if e.isCancelled(ctx, msg.TaskID) {
 		bb := e.blackboard(msg.TaskID)
 		store := state.ForTask(bb, msg.TaskID)
@@ -201,10 +200,10 @@ func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, ms
 	}
 
 	trigger := triggerForMessage(msg.MessageType)
-	isRework := wf.Round > 1 || msg.MessageType == protocol.MsgQAReject
+	isRework := wf.Round > 1 || msg.MessageType == domain.MsgQAReject
 
-	if isRework && msg.MessageType == protocol.MsgQAReject {
-		trigger = protocol.TriggerQAReject
+	if isRework && msg.MessageType == domain.MsgQAReject {
+		trigger = domain.TriggerQAReject
 		task, _ := e.tasks.Get(ctx, msg.TaskID)
 		if task.Status == domain.TaskStatusReworking {
 			_ = e.transitionTask(ctx, store, msg.TaskID, domain.TaskStatusReworking, domain.TaskStatusRunning, task.Progress, "")
@@ -239,7 +238,7 @@ func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, ms
 		}
 		trace.Nodes = append(trace.Nodes, domain.TraceNode{
 			ID: fmt.Sprintf("n%d", len(trace.Nodes)+1), Agent: name,
-			Label: ag.Card().DisplayName, Status: domain.AgentRunFailed,
+			Label: ag.(interface{ Card() agent.AgentCard }).Card().DisplayName, Status: domain.AgentRunFailed,
 			Output: runErr.Error(),
 		})
 		_ = e.traces.Save(ctx, trace)
@@ -248,15 +247,15 @@ func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, ms
 	}
 
 	trace.Nodes = append(trace.Nodes, buildTraceNode(
-		fmt.Sprintf("n%d", len(trace.Nodes)+1), name, ag.Card().DisplayName, out.Status, out.Summary, out.Metadata,
+		fmt.Sprintf("n%d", len(trace.Nodes)+1), name, ag.(interface{ Card() agent.AgentCard }).Card().DisplayName, out.Status, out.Summary, out.Metadata,
 	))
 	_ = e.traces.Save(ctx, trace)
 
-	agentMsg := protocol.NewAgentMessage(msg.TaskID, traceID, name, protocol.MessageType(out.MessageType), out.Payload, out.Artifacts)
+	agentMsg := domain.NewAgentMessage(msg.TaskID, traceID, name, domain.MessageType(out.MessageType), out.Payload, out.Artifacts)
 
 	task, _ = e.tasks.Get(ctx, msg.TaskID)
 	e.applyAgentStatus(ctx, &task, name, out)
-	if name == domain.AgentCoordinator && trigger == protocol.TriggerClarificationAnswered {
+	if name == domain.AgentCoordinator && trigger == domain.TriggerClarificationAnswered {
 		if meta, err := store.LoadTaskMeta(ctx); err == nil {
 			task.Competitors = meta.Competitors
 			task.Dimensions = meta.Dimensions
@@ -274,9 +273,9 @@ func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, ms
 	e.emitAgentState(msg.TaskID, name, out.Status, task.Progress, out.Summary)
 	e.ingestAfterAgent(ctx, string(name), msg.TaskID, store)
 
-	if name == domain.AgentQA && out.MessageType == string(protocol.MsgQAReject) {
-		qaPayload := protocol.QAResultPayload{}
-		if p, ok := out.Payload.(protocol.QAResultPayload); ok {
+	if name == domain.AgentQA && out.MessageType == string(domain.MsgQAReject) {
+		qaPayload := domain.QAResultPayload{}
+		if p, ok := out.Payload.(domain.QAResultPayload); ok {
 			qaPayload = p
 		}
 		if e.tryQAQueryLoop(ctx, msg.TaskID, traceID, store, wf, qaPayload) {
@@ -293,7 +292,7 @@ func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, ms
 		return nil
 	}
 
-	if name == domain.AgentQA && out.MessageType == string(protocol.MsgQAPass) {
+	if name == domain.AgentQA && out.MessageType == string(domain.MsgQAPass) {
 		return e.completeTask(ctx, msg.TaskID, store, trace, traceID)
 	}
 
@@ -303,13 +302,13 @@ func (e *Engine) handleAgentInput(ctx context.Context, name domain.AgentName, ms
 	return e.router.Publish(ctx, agentMsg)
 }
 
-func (e *Engine) tryQAQueryLoop(ctx context.Context, taskID, traceID string, store state.TaskStore, wf state.WorkflowState, qa protocol.QAResultPayload) bool {
+func (e *Engine) tryQAQueryLoop(ctx context.Context, taskID, traceID string, store state.TaskStore, wf state.WorkflowState, qa domain.QAResultPayload) bool {
 	if wf.QAQueryAttempts >= 1 {
 		return false
 	}
 	var claim string
 	for _, iss := range qa.Issues {
-		if iss.Category == protocol.IssueUnsupportedClaim {
+		if iss.Category == domain.IssueUnsupportedClaim {
 			claim = iss.Problem
 			if claim == "" {
 				claim = iss.Location
@@ -326,13 +325,13 @@ func (e *Engine) tryQAQueryLoop(ctx context.Context, taskID, traceID string, sto
 		"agent": string(domain.AgentQA), "kind": "note",
 		"content": "摘要缺少来源支撑，向 Analyst 发起证据追问…", "status": "done",
 	})
-	_ = e.router.PublishQAQuery(ctx, taskID, traceID, protocol.QAQueryPayload{
+	_ = e.router.PublishQAQuery(ctx, taskID, traceID, domain.QAQueryPayload{
 		Claim: claim, Question: "请提供该结论的来源依据与引用片段",
 	})
 	return true
 }
 
-func (e *Engine) forwardToAgent(ctx context.Context, target domain.AgentName, msg protocol.MessageEnvelope, _ string) error {
+func (e *Engine) forwardToAgent(ctx context.Context, target domain.AgentName, msg domain.MessageEnvelope, _ string) error {
 	topic := inputTopicForAgent(target)
 	if topic == "" {
 		return nil
@@ -342,21 +341,21 @@ func (e *Engine) forwardToAgent(ctx context.Context, target domain.AgentName, ms
 	return e.bus.Publish(ctx, topic, next)
 }
 
-func triggerForMessage(msgType protocol.MessageType) string {
+func triggerForMessage(msgType domain.MessageType) string {
 	switch msgType {
-	case protocol.MsgTaskCreated:
-		return protocol.TriggerTaskCreated
-	case protocol.MsgQAReject:
-		return protocol.TriggerQAReject
-	case protocol.MsgClarificationAnswered:
-		return protocol.TriggerClarificationAnswered
+	case domain.MsgTaskCreated:
+		return domain.TriggerTaskCreated
+	case domain.MsgQAReject:
+		return domain.TriggerQAReject
+	case domain.MsgClarificationAnswered:
+		return domain.TriggerClarificationAnswered
 	default:
-		return protocol.TriggerTaskCreated
+		return domain.TriggerTaskCreated
 	}
 }
 
-func (e *Engine) buildRunInput(ctx context.Context, msg protocol.MessageEnvelope, trigger string, store state.TaskStore, isRework bool, agentName domain.AgentName) agent.RunInput {
-	input := agent.RunInput{
+func (e *Engine) buildRunInput(ctx context.Context, msg domain.MessageEnvelope, trigger string, store state.TaskStore, isRework bool, agentName domain.AgentName) domain.RunInput {
+	input := domain.RunInput{
 		TaskID:      msg.TaskID,
 		TraceID:     msg.TraceID,
 		Attempt:     1,
@@ -382,8 +381,8 @@ func (e *Engine) loadOrInitTrace(ctx context.Context, taskID string) (domain.Tra
 }
 
 func (e *Engine) handleAgentErrorAsync(ctx context.Context, taskID, traceID string, name domain.AgentName, bb state.Blackboard, store state.TaskStore, err error) (handled bool, retErr error) {
-	var ae *protocol.AgentError
-	if !errors.As(err, &ae) || ae.Kind != protocol.ErrorKindClarificationRequired {
+	var ae *domain.AgentError
+	if !errors.As(err, &ae) || ae.Kind != domain.ErrorKindClarificationRequired {
 		return false, nil
 	}
 
@@ -402,7 +401,7 @@ func (e *Engine) handleAgentErrorAsync(ctx context.Context, taskID, traceID stri
 		"agent":    string(name),
 	})
 	e.emitTaskStatus(taskID, domain.TaskStatusClarifying, task.Progress)
-	_ = e.router.PublishClarification(ctx, taskID, traceID, protocol.ClarificationPayload{Question: ae.Message})
+	_ = e.router.PublishClarification(ctx, taskID, traceID, domain.ClarificationPayload{Question: ae.Message})
 	return true, ErrAwaitingClarification
 }
 
@@ -429,7 +428,7 @@ func (e *Engine) recoverActiveTasks(ctx context.Context) {
 			if topic == "" {
 				continue
 			}
-			msg := protocol.NewEnvelope(t.ID, wf.TraceID, "recovery", string(agentName), protocol.MsgTaskCreated, nil)
+			msg := domain.NewEnvelope(t.ID, wf.TraceID, "recovery", string(agentName), domain.MsgTaskCreated, nil)
 			_ = e.bus.Publish(ctx, topic, msg)
 		case domain.TaskStatusClarifying:
 			// 等待用户 POST /clarify

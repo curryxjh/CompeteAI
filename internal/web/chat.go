@@ -1,8 +1,8 @@
 package web
 
 import (
-	einosvc "CompeteAI/internal/eino"
-	"CompeteAI/internal/llm"
+	"CompeteAI/internal/domain"
+	llmsvc "CompeteAI/internal/llm"
 	"encoding/json"
 	"net/http"
 
@@ -12,10 +12,10 @@ import (
 var _ handler = (*ChatHandler)(nil)
 
 type ChatHandler struct {
-	chat *einosvc.ChatService
+	chat *llmsvc.ChatService
 }
 
-func NewChatHandler(chat *einosvc.ChatService) *ChatHandler {
+func NewChatHandler(chat *llmsvc.ChatService) *ChatHandler {
 	return &ChatHandler{chat: chat}
 }
 
@@ -26,7 +26,7 @@ func (h *ChatHandler) RegisterRoutes(server *gin.Engine) {
 }
 
 type chatReq struct {
-	Messages []llm.Message `json:"messages" binding:"required"`
+	Messages []domain.ChatMessage `json:"messages" binding:"required"`
 }
 
 type streamEvent struct {
@@ -85,7 +85,7 @@ func (h *ChatHandler) Stream(c *gin.Context) {
 		flusher.Flush()
 	}
 
-	err := h.chat.StreamChat(c.Request.Context(), req.Messages, func(ev einosvc.StreamEvent) error {
+	err := h.chat.StreamChat(c.Request.Context(), req.Messages, func(ev llmsvc.StreamEvent) error {
 		writeEvent(streamEvent{
 			Type:       string(ev.Type),
 			Content:    ev.Content,

@@ -1,4 +1,4 @@
-package eino
+package llm
 
 // StreamEventType SSE 事件类型
 type StreamEventType string
