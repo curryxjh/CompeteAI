@@ -1,12 +1,32 @@
+# ── 日志 & 临时文件 ───────────────────────────────────
 logs/*
-docs/
-.idea
+*.log
 .DS_Store
-mysql_data/
-config/
-docker-compose.yaml
-Dockerfile
+
+# ── IDE ───────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── 敏感配置（真实密码、API Key）──────────────────────
 .env
-.env.example
-task.md
+.env.local
+.env.*.local
+config/*.local.yaml
+docker-compose.yaml
+
+# ── 数据 & 构建产物 ────────────────────────────────────
+mysql_data/
 bin/
+task.md
+
+# ── 文档草稿 ──────────────────────────────────────────
+docs/
+docs_prompt/
+
+# ── Go ────────────────────────────────────────────────
+competete_ai
+compete-ai
+
+PROJECT_GUIDE.md

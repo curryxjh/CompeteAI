@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CompeteAI 开发配置模板
+#
+# 使用方式：
+#   1. 复制此文件为 dev.local.yaml 填入真实值（dev.local.yaml 已加入 .gitignore）
+#   2. 或通过环境变量覆盖（优先级最高）
+#
+# 配置优先级：环境变量 > dev.local.yaml > dev.yaml
+# 环境变量：
+#   MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD / MYSQL_DB
+#   REDIS_HOST / REDIS_PORT / REDIS_PASSWORD
+#   MILVUS_ADDRESS（格式 host:port，如 192.168.1.100:19530）
+#   ARK_API_KEY / VOLCANO_EMBED_API_KEY
+# ─────────────────────────────────────────────────────────────────────────────
+name: compete-ai
+mode: dev
+version: "1.0.0"
+start_time: "2026-01-01"
+machine_id: 1
+port: 8080
+
+log:
+  level: debug
+  mode: dev
+  filename: logs/compete_ai.log
+  max_size: 100
+  max_age: 30
+  max_backups: 5
+  file_output_enabled: true
+  file_output_compress: false
+  console_output_enabled: true
+  console_output_colorful: true
+  console_output_time_format: "2006-01-02 15:04:05"
+
+mysql:
+  host: "<YOUR_MYSQL_HOST>"
+  user: "<YOUR_MYSQL_USER>"
+  password: "<YOUR_MYSQL_PASSWORD>"
+  dbname: "compete_ai"
+  port: 3306
+  max_open_conns: 20
+  max_idle_conns: 5
+
+redis:
+  host: "<YOUR_REDIS_HOST>"
+  password: "<YOUR_REDIS_PASSWORD>"
+  port: 6379
+  db: 0
+  pool_size: 10
+  min_idle_conns: 2
+
+llm:
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"
+  api_key: "<YOUR_ARK_API_KEY>"
+  # model 填写方舟控制台「推理接入点」的 ep-xxx ID
+  # 也可通过环境变量 ARK_MODEL 覆盖
+  model: "<YOUR_ARK_MODEL_EP>"
+
+firecrawl_mcp:
+  enabled: false
+  command: "npx"
+  args: ["-y", "firecrawl-mcp"]
+
+kafka:
+  enabled: false
+  brokers: ["<YOUR_KAFKA_BROKER>:9092"]
+  group_id: "compete-ai"
+
+workflow:
+  max_agent_retries: 3
+  max_rounds: 2
+  use_redis_blackboard: true
+  blackboard_registry_max_size: 1000
+
+# ── 长期记忆系统配置 ──────────────────────────────────────────────────────────
+memory:
+  enabled: true
+  project_id: "compete-ai"
+  workspace_id: "default"
+  explicit_file: ""
+
+  # Embedding 配置
+  # type: volcano → 使用火山引擎真实语义向量（需配置 api_key + model）
+  # type: hash    → 使用本地哈希向量（无需 API，降级用）
+  embedder:
+    type: "volcano"
+    api_key: "<YOUR_VOLCANO_EMBED_API_KEY>"
+    # endpoint = 火山引擎 API 基础 URL（不含路径）
+    endpoint: "https://ark.cn-beijing.volces.com/api/v3"
+    # model = 方舟控制台「推理接入点」的 ep-xxx ID
+    model: "<YOUR_EMBED_MODEL_EP>"
+    dim: 1024
+
+  retrieval:
+    top_k_facts: 10
+    top_k_episodes: 3
+    top_k_evidence: 5
+    rerank: false
+
+  write_policy:
+    min_confidence: 0.5
+    allow_pending_inference: true
+    require_source_for_fact: false
+    episode_on_completion_only: true
+
+  governance:
+    decay_after_days: 30
+    stale_after_days: 90
+    invalid_after_days: 180
+
+  # Milvus 向量数据库配置
+  # enabled: true  → 启用混合检索（ANN + MySQL 关键词，RRF 融合）
+  # enabled: false → 退回纯 MySQL 关键词检索
+  milvus:
+    enabled: true
+    address: "<YOUR_MILVUS_HOST>:19530"
+    collection_prefix: "compete_ai"
+    dim: 1024
+    index_type: "HNSW"
+    metric_type: "COSINE"
+    hnsw_m: 16
+    hnsw_ef_construct: 200
