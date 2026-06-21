@@ -2,12 +2,14 @@
 // 本文件包含任务聚合根及其值对象、枚举常量。
 package domain
 
+import "fmt"
+
 // ──────────────────────────────────────────────────────
 // 任务状态枚举
 // ──────────────────────────────────────────────────────
 
 // TaskStatus 任务生命周期状态，对应工作流状态机的合法节点。
-// 合法转换由 workflow/state.go 的 taskTransitions 定义。
+// 合法转换规则见 Task.CanTransitionTo 方法。
 type TaskStatus string
 
 const (
@@ -110,4 +112,99 @@ func DefaultAgentStates() []AgentState {
 		{Name: AgentWriter, Status: AgentRunPending},
 		{Name: AgentQA, Status: AgentRunPending},
 	}
+}
+
+// ──────────────────────────────────────────────────────
+// 任务状态转换规则（领域行为）
+// ──────────────────────────────────────────────────────
+
+// TaskTransitions 合法 TaskStatus 转换表（§15.1）。
+// 终态 Completed / Failed / Cancelled 没有合法目标。
+var TaskTransitions = map[TaskStatus][]TaskStatus{
+	TaskStatusPending:           {TaskStatusQueued, TaskStatusRunning, TaskStatusCancelled},
+	TaskStatusQueued:            {TaskStatusRunning, TaskStatusCancelled, TaskStatusFailed},
+	TaskStatusRunning:           {TaskStatusClarifying, TaskStatusReworking, TaskStatusWaitingReply, TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled, TaskStatusAttentionRequired},
+	TaskStatusClarifying:        {TaskStatusRunning, TaskStatusFailed, TaskStatusCancelled},
+	TaskStatusReworking:         {TaskStatusRunning, TaskStatusCompleted, TaskStatusFailed, TaskStatusCancelled},
+	TaskStatusWaitingReply:      {TaskStatusRunning, TaskStatusFailed, TaskStatusCancelled},
+	TaskStatusAttentionRequired: {TaskStatusRunning, TaskStatusFailed, TaskStatusCancelled},
+	TaskStatusCompleted:         {},
+	TaskStatusFailed:            {},
+	TaskStatusCancelled:         {},
+}
+
+// CanTransitionTo 校验任务状态是否允许转换到目标状态。
+func (t *Task) CanTransitionTo(target TaskStatus) bool {
+	if t.Status == target {
+		return true
+	}
+	allowed, ok := TaskTransitions[t.Status]
+	if !ok {
+		return false
+	}
+	for _, s := range allowed {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
+// TransitionTo 执行状态转换，不合法时返回错误。
+func (t *Task) TransitionTo(target TaskStatus) error {
+	if !t.CanTransitionTo(target) {
+		return ErrInvalidTransition
+	}
+	t.Status = target
+	return nil
+}
+
+// ErrInvalidTransition 非法任务状态转换。
+var ErrInvalidTransition = fmt.Errorf("invalid task status transition")
+
+// PipelineOrder 主流程 Agent 顺序。
+var PipelineOrder = []AgentName{
+	AgentCoordinator,
+	AgentCollector,
+	AgentAnalyst,
+	AgentWriter,
+	AgentQA,
+}
+
+// AgentIndex 返回 Agent 在流水线中的索引，未知 Agent 返回 -1。
+func AgentIndex(name AgentName) int {
+	for i, n := range PipelineOrder {
+		if n == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// ShouldRunAgent QA 打回后局部重跑：Coordinator 始终执行，其余从 target 开始。
+func ShouldRunAgent(name, target AgentName, isRework bool) bool {
+	if !isRework {
+		return true
+	}
+	if name == AgentCoordinator {
+		return true
+	}
+	if target == "" {
+		return true
+	}
+	ti := AgentIndex(target)
+	ni := AgentIndex(name)
+	if ti < 0 || ni < 0 {
+		return true
+	}
+	return ni >= ti
+}
+
+// NextAgentInPipeline 正常主流程下一跳。
+func NextAgentInPipeline(current AgentName) (AgentName, bool) {
+	idx := AgentIndex(current)
+	if idx < 0 || idx >= len(PipelineOrder)-1 {
+		return "", false
+	}
+	return PipelineOrder[idx+1], true
 }
